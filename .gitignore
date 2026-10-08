@@ -1,0 +1,39 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Test and coverage caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary video/audio chunks and downloads
+temp/*
+!temp/.gitkeep
+*.part
+*.ytdl
+*.mp4
+*.m4a
+*.webm
+*.mkv
+
+# SQLite lock and journal files (preserves main downloads.db)
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Execution and runtime logs
+logs/*.log
+!logs/.gitkeep
+*.log
+
+# Operating system artifacts
+.DS_Store
+Thumbs.db
