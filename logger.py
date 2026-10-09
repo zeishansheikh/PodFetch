@@ -80,17 +80,51 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
     return logging.getLogger("yt_drive_automation")
 
 
-def log_automation_summary(
-    channels_checked: int,
-    new_candidates: int,
+def log_podfetch_summary(
+    youtube_candidates: int,
+    pinterest_candidates: int,
+    duplicates_skipped: int,
+    eligible_videos: int,
     selected: int,
     downloaded: int,
     uploaded: int,
-    skipped: int,
     failed: int,
     logger: Optional[logging.Logger] = None,
 ) -> None:
-    """Output the standardized execution summary banner required by specifications."""
+    """Output the exact PODFETCH SUMMARY execution report format specified in requirements."""
+    active_logger = logger or get_logger()
+    summary_lines = [
+        "",
+        "PODFETCH SUMMARY",
+        "",
+        f"YouTube candidates: {youtube_candidates}",
+        f"Pinterest candidates: {pinterest_candidates}",
+        f"Duplicates skipped: {duplicates_skipped}",
+        f"Eligible videos: {eligible_videos}",
+        f"Selected: {selected}",
+        f"Downloaded: {downloaded}",
+        f"Uploaded to Google Drive: {uploaded}",
+        f"Failed: {failed}",
+        "",
+    ]
+    summary_text = "\n".join(summary_lines)
+    for line in summary_lines:
+        if line.strip():
+            active_logger.info(line)
+    print(summary_text, flush=True)
+
+
+def log_automation_summary(
+    channels_checked: int = 0,
+    new_candidates: int = 0,
+    selected: int = 0,
+    downloaded: int = 0,
+    uploaded: int = 0,
+    skipped: int = 0,
+    failed: int = 0,
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """Output execution summary banner for backwards compatibility."""
     active_logger = logger or get_logger()
     summary_lines = [
         "",
@@ -111,5 +145,5 @@ def log_automation_summary(
     for line in summary_lines:
         if line.strip():
             active_logger.info(line)
-    # Also print to stdout directly to ensure visibility in headless console logs
     print(summary_text, flush=True)
+

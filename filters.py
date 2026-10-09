@@ -26,12 +26,38 @@ class VideoCandidate:
     duration_seconds: Optional[int] = None
     is_short: bool = False
     is_live: bool = False
+    platform: str = "youtube"
+    source_id: Optional[str] = None
+    canonical_url: Optional[str] = None
+    search_keyword: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    thumbnail_url: Optional[str] = None
+    description: Optional[str] = None
+    is_image: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.source_id:
+            self.source_id = self.youtube_video_id
+        if not self.canonical_url:
+            self.canonical_url = self.youtube_url
+        if not self.youtube_video_id:
+            self.youtube_video_id = self.source_id or ""
+        if not self.youtube_url:
+            self.youtube_url = self.canonical_url or ""
 
     @property
     def duration_minutes(self) -> float:
         if self.duration_seconds is None:
             return 0.0
         return self.duration_seconds / 60.0
+
+    @property
+    def is_vertical(self) -> Optional[bool]:
+        """True if vertical aspect ratio (height > width), False if landscape/square, None if unknown."""
+        if self.width is not None and self.height is not None and self.width > 0:
+            return self.height > self.width
+        return None
 
 
 class VideoFilter:
@@ -48,14 +74,43 @@ class VideoFilter:
             Tuple of (is_accepted, rejection_reason).
         """
         # 1. Check SQLite database for prior completion
-        if self.db.is_video_processed(candidate.youtube_video_id):
+        lookup_id = candidate.source_id or candidate.youtube_video_id
+        if self.db.is_video_processed(lookup_id, platform=candidate.platform):
             return False, "Already processed/uploaded in database"
 
-        existing = self.db.get_video(candidate.youtube_video_id)
+        existing = self.db.get_video(lookup_id, platform=candidate.platform)
         if existing and existing["status"] in (VideoStatus.DOWNLOADING, VideoStatus.DOWNLOADED):
             return False, f"Video is already currently in progress (status: {existing['status']})"
 
-        # 2. Check Shorts
+        # 2. Exclude static images
+        if candidate.is_image:
+            return False, "Static image pins are excluded; only video media is permitted"
+
+        # 3. Platform-specific filtering: Pinterest
+        if candidate.platform == "pinterest":
+            # Pinterest duration filter in seconds
+            if candidate.duration_seconds is not None:
+                if (
+                    self.config.min_video_duration_seconds > 0
+                    and candidate.duration_seconds < self.config.min_video_duration_seconds
+                ):
+                    return (
+                        False,
+                        f"Duration ({candidate.duration_seconds}s) is less than Pinterest minimum "
+                        f"required {self.config.min_video_duration_seconds}s",
+                    )
+                if (
+                    self.config.max_video_duration_seconds is not None
+                    and candidate.duration_seconds > self.config.max_video_duration_seconds
+                ):
+                    return (
+                        False,
+                        f"Duration ({candidate.duration_seconds}s) exceeds Pinterest maximum "
+                        f"limit of {self.config.max_video_duration_seconds}s",
+                    )
+            return True, None
+
+        # 4. Platform-specific filtering: YouTube
         if candidate.is_short and not self.config.allow_shorts:
             return False, "Shorts are excluded by policy"
 
@@ -66,11 +121,10 @@ class VideoFilter:
         ):
             return False, f"Video length ({candidate.duration_seconds}s) matches YouTube Short criteria"
 
-        # 3. Check Livestreams
         if candidate.is_live and not self.config.allow_livestreams:
             return False, "Livestreams / ongoing premieres are excluded"
 
-        # 4. Check minimum duration
+        # Check minimum duration for YouTube podcasts
         min_seconds = self.config.min_duration_minutes * 60
         if candidate.duration_seconds is not None and candidate.duration_seconds < min_seconds:
             return (
@@ -79,7 +133,7 @@ class VideoFilter:
                 f"is less than minimum required {self.config.min_duration_minutes}m",
             )
 
-        # 5. Check maximum duration (if configured)
+        # Check maximum duration for YouTube
         if self.config.max_duration_minutes is not None and candidate.duration_seconds is not None:
             max_seconds = self.config.max_duration_minutes * 60
             if candidate.duration_seconds > max_seconds:
@@ -89,10 +143,9 @@ class VideoFilter:
                     f"of {self.config.max_duration_minutes}m",
                 )
 
-        # 6. Check video age
+        # Check video age for YouTube
         if candidate.published_at is not None:
             now = datetime.now(timezone.utc)
-            # Ensure published_at is timezone-aware
             pub = candidate.published_at
             if pub.tzinfo is None:
                 pub = pub.replace(tzinfo=timezone.utc)

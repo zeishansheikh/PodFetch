@@ -306,3 +306,94 @@ def select_videos_for_run(
                 selected.append(chosen_candidate)
 
     return selected
+
+
+def select_multisource_candidates(
+    candidates_by_source: Dict[str, List[VideoCandidate]],
+    min_count: int,
+    max_count: int,
+    historical_counts: Dict[str, int],
+    exact_limit: Optional[int] = None,
+    prefer_vertical: bool = True,
+) -> List[VideoCandidate]:
+    """Select candidates fairly and intelligently across multiple platforms (YouTube and Pinterest).
+
+    Features:
+    - Filters out static images and already-processed items.
+    - For Pinterest: prioritizes vertical 9:16 videos over unknown or horizontal media.
+    - For YouTube: prioritizes recent uploads and balances channels.
+    - Balances selection across enabled sources in a round-robin manner.
+    - Selects between min_count and max_count (or exact_limit), without exceeding available candidates.
+    """
+    all_eligible: List[VideoCandidate] = []
+    for cands in candidates_by_source.values():
+        all_eligible.extend(cands)
+
+    if not all_eligible:
+        return []
+
+    # Determine target selection count
+    if exact_limit is not None and exact_limit > 0:
+        target_count = min(exact_limit, len(all_eligible))
+    else:
+        target_count = random.randint(min_count, max_count)
+        target_count = min(target_count, len(all_eligible))
+
+    if target_count <= 0:
+        return []
+
+    # Prepare ranked pools per source
+    source_pools: Dict[str, List[VideoCandidate]] = {}
+    for source_name, cands in candidates_by_source.items():
+        if not cands:
+            continue
+
+        if source_name == "pinterest":
+            # Sort Pinterest: prioritize vertical 9:16 when prefer_vertical is True
+            def sort_key_pinterest(c: VideoCandidate) -> Tuple[int, int]:
+                # Priority: vertical (2), unknown (1), horizontal (0)
+                if prefer_vertical:
+                    v_prio = 2 if c.is_vertical is True else (1 if c.is_vertical is None else 0)
+                else:
+                    v_prio = 0
+                # Secondary: prefer non-empty title or duration within range
+                dur_prio = 1 if (c.duration_seconds and 10 <= c.duration_seconds <= 30) else 0
+                return (v_prio, dur_prio)
+
+            sorted_p = sorted(cands, key=sort_key_pinterest, reverse=True)
+            source_pools[source_name] = list(sorted_p)
+
+        elif source_name == "youtube":
+            # Group by channel and order fairly
+            by_channel: Dict[str, List[VideoCandidate]] = defaultdict(list)
+            for c in cands:
+                by_channel[c.channel_id].append(c)
+
+            yt_ordered = select_videos_for_run(
+                eligible_by_channel=by_channel,
+                min_count=len(cands),
+                max_count=len(cands),
+                historical_counts=historical_counts,
+                exact_limit=len(cands),
+            )
+            source_pools[source_name] = list(yt_ordered)
+
+        else:
+            source_pools[source_name] = list(cands)
+
+    # Balance selection between available sources
+    selected: List[VideoCandidate] = []
+    sources = list(source_pools.keys())
+    # Randomize first platform to avoid always favoring one
+    random.shuffle(sources)
+
+    while len(selected) < target_count and any(source_pools.values()):
+        for src in sources:
+            if len(selected) >= target_count:
+                break
+            pool = source_pools.get(src, [])
+            if pool:
+                selected.append(pool.pop(0))
+
+    return selected
+

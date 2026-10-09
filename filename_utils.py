@@ -67,10 +67,42 @@ def generate_video_filename(
     """
     clean_channel = sanitize_filename(channel_name, max_length=40)
     clean_title = sanitize_filename(title, max_length=120)
-    clean_video_id = sanitize_filename(youtube_video_id, max_length=20)
+    clean_video_id = sanitize_filename(youtube_video_id, max_length=30)
     clean_ext = extension.lstrip(".")
 
     return f"{clean_channel} - {clean_title} - {clean_video_id}.{clean_ext}"
+
+
+def generate_source_filename(
+    platform: str,
+    keyword_or_channel: str,
+    source_id: str,
+    extension: str = "mp4",
+) -> str:
+    """Generate standardized filename for Pinterest or YouTube source candidates.
+
+    Format:
+        {Platform} - {keyword_or_channel} - {source_id}.mp4
+        Example:
+            Pinterest - aesthetic-nature-videos - 123456789.mp4
+            YouTube - nature-aesthetic - abc123XYZ00.mp4
+
+    Args:
+        platform: Source platform name ('Pinterest', 'YouTube', etc.).
+        keyword_or_channel: The search keyword or channel name.
+        source_id: Platform-specific unique ID (Pin ID or YouTube video ID).
+        extension: File extension without leading dot (default 'mp4').
+
+    Returns:
+        Formatted and sanitized filename.
+    """
+    clean_platform = sanitize_filename(platform.capitalize(), max_length=20)
+    # Replace spaces with hyphens for clean slug-like keyword representation if preferred
+    clean_keyword = sanitize_filename(keyword_or_channel.replace(" ", "-"), max_length=60)
+    clean_id = sanitize_filename(source_id, max_length=40)
+    clean_ext = extension.lstrip(".")
+
+    return f"{clean_platform} - {clean_keyword} - {clean_id}.{clean_ext}"
 
 
 def format_duration(seconds: int | float | None) -> str:
@@ -86,3 +118,4 @@ def format_duration(seconds: int | float | None) -> str:
     if hours > 0:
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
+
