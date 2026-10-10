@@ -97,6 +97,8 @@ class VideoDownloader:
             "socket_timeout": 30,
             # Prevent lingering partial downloads on uncaught aborts
             "nopart": False,
+            "concurrent_fragment_downloads": getattr(self.config, "concurrent_fragment_downloads", 8),
+            "buffersize": 1024 * 64,
         }
 
         last_error: Optional[Exception] = None

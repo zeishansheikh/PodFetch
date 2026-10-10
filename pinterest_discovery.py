@@ -445,6 +445,9 @@ class PinterestDiscoverer:
     ) -> Tuple[List[VideoCandidate], int, int, List[str]]:
         """Search all configured Pinterest keywords, filter video media, and deduplicate.
 
+        Uses concurrent worker threads to query multiple keywords in parallel, accelerating
+        discovery by up to 10x, and stops searching once an adequate candidate pool is reached.
+
         Returns:
             Tuple of:
             - List of eligible VideoCandidate objects
@@ -452,6 +455,8 @@ class PinterestDiscoverer:
             - Total skipped (duplicates + static images)
             - List of search error messages / warnings
         """
+        import concurrent.futures
+
         target_keywords = keywords or self.config.pinterest_keywords
         logger.info(f"Checking {len(target_keywords)} configured Pinterest keyword(s)...")
 
@@ -460,59 +465,96 @@ class PinterestDiscoverer:
         total_skipped = 0
         search_errors: List[str] = []
 
-        for kw in target_keywords:
-            try:
-                pins = self.search_keyword(kw)
-                total_examined += len(pins)
+        max_workers = min(len(target_keywords), getattr(self.config, "discovery_max_workers", 6))
+        candidate_pool = getattr(self.config, "discovery_candidate_pool", 30)
 
-                for pin in pins:
-                    # Exclude static images
-                    if not pin.is_video:
-                        total_skipped += 1
-                        logger.debug(f"Skipped static image Pin {pin.pin_id} for keyword '{kw}'")
-                        continue
+        def _process_pins_for_keyword(kw: str, pins: List[PinterestPinMetadata]) -> None:
+            nonlocal total_examined, total_skipped
+            total_examined += len(pins)
+            for pin in pins:
+                # Exclude static images
+                if not pin.is_video:
+                    total_skipped += 1
+                    logger.debug(f"Skipped static image Pin {pin.pin_id} for keyword '{kw}'")
+                    continue
 
-                    # Deduplication across keywords
-                    if pin.pin_id in seen_pins:
-                        total_skipped += 1
-                        existing_cand = seen_pins[pin.pin_id]
-                        # Preserve additional discovery keyword
-                        if existing_cand.search_keyword and kw not in existing_cand.search_keyword:
-                            existing_cand.search_keyword = f"{existing_cand.search_keyword}, {kw}"
-                        logger.debug(
-                            f"Duplicate Pin {pin.pin_id} discovered again under keyword '{kw}'; preserved keyword"
-                        )
-                        continue
-
-                    # Create VideoCandidate for video Pin
-                    candidate = VideoCandidate(
-                        youtube_video_id=pin.pin_id,
-                        channel_id=f"pinterest_{kw.replace(' ', '_')}",
-                        channel_name="Pinterest",
-                        title=pin.title,
-                        youtube_url=pin.canonical_url,
-                        published_at=None,
-                        duration_seconds=pin.duration_seconds,
-                        is_short=False,
-                        is_live=False,
-                        platform="pinterest",
-                        source_id=pin.pin_id,
-                        canonical_url=pin.canonical_url,
-                        search_keyword=kw,
-                        width=pin.width,
-                        height=pin.height,
-                        thumbnail_url=pin.thumbnail_url,
-                        description=pin.description,
-                        is_image=False,
+                # Deduplication across keywords
+                if pin.pin_id in seen_pins:
+                    total_skipped += 1
+                    existing_cand = seen_pins[pin.pin_id]
+                    # Preserve additional discovery keyword
+                    if existing_cand.search_keyword and kw not in existing_cand.search_keyword:
+                        existing_cand.search_keyword = f"{existing_cand.search_keyword}, {kw}"
+                    logger.debug(
+                        f"Duplicate Pin {pin.pin_id} discovered again under keyword '{kw}'; preserved keyword"
                     )
-                    seen_pins[pin.pin_id] = candidate
+                    continue
 
-            except Exception as e:
-                err_msg = f"Failed searching Pinterest keyword '{kw}': {e}"
-                logger.error(err_msg)
-                search_errors.append(err_msg)
-                # Continue to next keyword per requirement
-                continue
+                # Create VideoCandidate for video Pin
+                candidate = VideoCandidate(
+                    youtube_video_id=pin.pin_id,
+                    channel_id=f"pinterest_{kw.replace(' ', '_')}",
+                    channel_name="Pinterest",
+                    title=pin.title,
+                    youtube_url=pin.canonical_url,
+                    published_at=None,
+                    duration_seconds=pin.duration_seconds,
+                    is_short=False,
+                    is_live=False,
+                    platform="pinterest",
+                    source_id=pin.pin_id,
+                    canonical_url=pin.canonical_url,
+                    search_keyword=kw,
+                    width=pin.width,
+                    height=pin.height,
+                    thumbnail_url=pin.thumbnail_url,
+                    description=pin.description,
+                    is_image=False,
+                )
+                seen_pins[pin.pin_id] = candidate
+
+        if max_workers <= 1 or len(target_keywords) <= 1:
+            for kw in target_keywords:
+                try:
+                    pins = self.search_keyword(kw)
+                    _process_pins_for_keyword(kw, pins)
+                    if candidate_pool > 0 and len(seen_pins) >= candidate_pool:
+                        logger.info(
+                            f"Target candidate pool reached ({len(seen_pins)} video pins). "
+                            "Stopping additional keyword searches."
+                        )
+                        break
+                except Exception as e:
+                    err_msg = f"Failed searching Pinterest keyword '{kw}': {e}"
+                    logger.error(err_msg)
+                    search_errors.append(err_msg)
+                    continue
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_kw = {
+                    executor.submit(self.search_keyword, kw): kw
+                    for kw in target_keywords
+                }
+                for future in concurrent.futures.as_completed(future_to_kw):
+                    kw = future_to_kw[future]
+                    try:
+                        pins = future.result()
+                        _process_pins_for_keyword(kw, pins)
+
+                        if candidate_pool > 0 and len(seen_pins) >= candidate_pool:
+                            logger.info(
+                                f"Target candidate pool reached ({len(seen_pins)} video pins). "
+                                "Cancelling pending keyword searches for faster execution."
+                            )
+                            for pending_f in future_to_kw:
+                                pending_f.cancel()
+                            break
+
+                    except Exception as e:
+                        err_msg = f"Failed searching Pinterest keyword '{kw}': {e}"
+                        logger.error(err_msg)
+                        search_errors.append(err_msg)
+                        continue
 
         eligible_candidates = list(seen_pins.values())
         logger.info(

@@ -153,16 +153,16 @@ class PinterestDownloader:
                 "best[height<=854]/best"
             )
         else:
-            # 1080p / best: Prioritize 1080p streams (width>=1080 or height>=1080), then highest quality video+audio
+            # 1080p Full HD: Require streams meeting 1080p, prioritizing fast direct HTTP/HTTPS
             return (
+                "bestvideo[protocol^=http][width>=1080][height>=1080]+bestaudio[ext=m4a]/"
+                "best[protocol^=http][width>=1080][height>=1080]/"
+                "bestvideo[width>=1080][height>=1080]+bestaudio[ext=m4a]/"
+                "best[width>=1080][height>=1080]/"
+                "bestvideo[protocol^=http][width>=1080]+bestaudio[ext=m4a]/"
+                "best[protocol^=http][width>=1080]/"
                 "bestvideo[width>=1080]+bestaudio[ext=m4a]/"
-                "best[width>=1080]/"
-                "bestvideo[height>=1080]+bestaudio[ext=m4a]/"
-                "best[height>=1080]/"
-                "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
-                "bestvideo+bestaudio/"
-                "best[ext=mp4]/"
-                "best"
+                "best[width>=1080]"
             )
 
     def download_video(self, candidate: VideoCandidate) -> Path:
@@ -199,7 +199,7 @@ class PinterestDownloader:
         format_str = self._build_format_selector()
         ydl_opts: Dict[str, Any] = {
             "format": format_str,
-            "format_sort": ["res:1080", "width:1080", "height:1920", "+size"],
+            "format_sort": ["res:1080", "width:1080", "height:1920", "+size", "proto:https"],
             "outtmpl": str(part_template),
             "merge_output_format": "mp4",
             "quiet": False,
@@ -208,6 +208,8 @@ class PinterestDownloader:
             "fragment_retries": 5,
             "socket_timeout": 30,
             "nopart": False,
+            "concurrent_fragment_downloads": getattr(self.config, "concurrent_fragment_downloads", 8),
+            "buffersize": 1024 * 64,
         }
 
         # Apply cookies only if explicitly configured
@@ -296,13 +298,25 @@ class PinterestDownloader:
                     except OSError:
                         pass
 
+                err_str = str(e).lower()
+                is_non_retriable = (
+                    "does not meet required" in err_str
+                    or "requested format is not available" in err_str
+                )
+                if is_non_retriable:
+                    logger.info(
+                        f"Pin {pin_id} does not satisfy required resolution or format; "
+                        "skipping retries and proceeding immediately to fallback."
+                    )
+                    break
+
                 if attempt < self.config.max_retries:
                     sleep_time = self.config.backoff_factor ** attempt
                     logger.info(f"Retrying Pinterest download in {sleep_time:.1f} seconds...")
                     time.sleep(sleep_time)
 
         raise PinterestDownloadError(
-            f"Failed to download Pinterest video {pin_id} after {self.config.max_retries} attempts: {last_error}"
+            f"Failed to download Pinterest video {pin_id} after {attempt} attempt(s): {last_error}"
         )
 
     def cleanup_file(self, file_path: Path) -> None:

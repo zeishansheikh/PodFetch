@@ -275,6 +275,9 @@ class AppConfig:
     download_quality: str = "1080p"
     max_retries: int = 3
     backoff_factor: float = 2.0
+    concurrent_fragment_downloads: int = 8
+    discovery_max_workers: int = 6
+    discovery_candidate_pool: int = 30
 
     # Google Auth Settings
     google_service_account_file: Optional[str] = None
@@ -427,6 +430,9 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
         download_quality=os.getenv("DOWNLOAD_QUALITY", "1080p").strip(),
         max_retries=int(os.getenv("MAX_RETRIES", "3")),
         backoff_factor=float(os.getenv("BACKOFF_FACTOR", "2.0")),
+        concurrent_fragment_downloads=int(os.getenv("CONCURRENT_FRAGMENT_DOWNLOADS", "8")),
+        discovery_max_workers=int(os.getenv("DISCOVERY_MAX_WORKERS", "6")),
+        discovery_candidate_pool=int(os.getenv("DISCOVERY_CANDIDATE_POOL", "30")),
         google_service_account_file=os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE"),
         google_service_account_json=os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"),
         google_client_id=os.getenv("GOOGLE_CLIENT_ID"),

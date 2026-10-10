@@ -323,7 +323,7 @@ def execute_pipeline(
         logger=logger,
     )
 
-    return 0 if failed_count == 0 else 1
+    return 0 if (uploaded_count >= target_uploads or failed_count == 0) else 1
 
 
 def main() -> None:
