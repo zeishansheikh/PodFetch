@@ -194,8 +194,17 @@ def execute_pipeline(
     youtube_downloader = VideoDownloader(config)
     pinterest_downloader = PinterestDownloader(config)
 
-    # 5. Process Selected Candidates
-    for candidate in selected_candidates:
+    # 5. Process Selected Candidates with fallback queue recovery
+    target_uploads = len(selected_candidates)
+    candidate_queue = list(selected_candidates)
+    queued_ids = {c.source_id or c.youtube_video_id for c in candidate_queue}
+    fallback_pool = [
+        c for cands in candidates_by_source.values() for c in cands
+        if (c.source_id or c.youtube_video_id) not in queued_ids
+    ]
+
+    while candidate_queue and (config.dry_run or uploaded_count < target_uploads):
+        candidate = candidate_queue.pop(0)
         platform = candidate.platform
         source_id = candidate.source_id or candidate.youtube_video_id
         keyword_or_channel = candidate.search_keyword or candidate.channel_name
@@ -287,6 +296,14 @@ def execute_pipeline(
                 platform=platform,
                 error_message=error_msg,
             )
+            # Queue next eligible fallback candidate to fulfill run target
+            if uploaded_count < target_uploads and fallback_pool:
+                next_fallback = fallback_pool.pop(0)
+                candidate_queue.append(next_fallback)
+                logger.info(
+                    f"Queued fallback candidate [{next_fallback.platform.upper()}]: "
+                    f"'{next_fallback.title}' ({next_fallback.source_id}) to fulfill target upload quota."
+                )
 
         finally:
             # Step E: Delete temporary local file after upload attempt

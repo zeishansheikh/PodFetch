@@ -136,23 +136,34 @@ class PinterestDownloader:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
     def _build_format_selector(self) -> str:
-        """Construct yt-dlp format selector prioritizing MP4 within configured quality limits."""
+        """Construct yt-dlp format selector prioritizing 1080p and highest resolution."""
         quality = self.config.download_quality.lower()
         if "720" in quality:
-            max_height = 720
+            return (
+                "bestvideo[ext=mp4][height<=1280]+bestaudio[ext=m4a]/"
+                "bestvideo[height<=1280]+bestaudio/"
+                "best[ext=mp4][height<=1280]/"
+                "best[height<=1280]/best"
+            )
         elif "480" in quality:
-            max_height = 480
-        elif "best" in quality or "max" in quality:
-            max_height = 2160
+            return (
+                "bestvideo[ext=mp4][height<=854]+bestaudio[ext=m4a]/"
+                "bestvideo[height<=854]+bestaudio/"
+                "best[ext=mp4][height<=854]/"
+                "best[height<=854]/best"
+            )
         else:
-            max_height = 1080
-
-        return (
-            f"bestvideo[ext=mp4][height<={max_height}]+bestaudio[ext=m4a]/"
-            f"bestvideo[height<={max_height}]+bestaudio/"
-            f"best[ext=mp4][height<={max_height}]/"
-            f"best[height<={max_height}]/best"
-        )
+            # 1080p / best: Prioritize 1080p streams (width>=1080 or height>=1080), then highest quality video+audio
+            return (
+                "bestvideo[width>=1080]+bestaudio[ext=m4a]/"
+                "best[width>=1080]/"
+                "bestvideo[height>=1080]+bestaudio[ext=m4a]/"
+                "best[height>=1080]/"
+                "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
+                "bestvideo+bestaudio/"
+                "best[ext=mp4]/"
+                "best"
+            )
 
     def download_video(self, candidate: VideoCandidate) -> Path:
         """Download video Pin with retries, exponential backoff, and FFprobe verification.
@@ -188,6 +199,7 @@ class PinterestDownloader:
         format_str = self._build_format_selector()
         ydl_opts: Dict[str, Any] = {
             "format": format_str,
+            "format_sort": ["res:1080", "width:1080", "height:1920", "+size"],
             "outtmpl": str(part_template),
             "merge_output_format": "mp4",
             "quiet": False,
@@ -244,6 +256,24 @@ class PinterestDownloader:
                     # Never mark an invalid media file as successful
                     self.cleanup_file(final_file_path)
                     raise PinterestDownloadError(f"Downloaded file failed validation: {reason}")
+
+                # Enforce 1080p resolution verification via FFprobe
+                if self.config.min_video_resolution >= 1080 and meta.get("width") and meta.get("height"):
+                    w = meta["width"]
+                    h = meta["height"]
+                    is_vert = h >= w
+                    if is_vert and (w < 1080 and h < 1920):
+                        self.cleanup_file(final_file_path)
+                        raise PinterestDownloadError(
+                            f"Downloaded video resolution {w}x{h} does not meet required 1080p Full HD "
+                            f"(expected minimum 1080x1920 vertical, got {w}x{h})"
+                        )
+                    elif not is_vert and (h < 1080 and w < 1920):
+                        self.cleanup_file(final_file_path)
+                        raise PinterestDownloadError(
+                            f"Downloaded video resolution {w}x{h} does not meet required 1080p Full HD "
+                            f"(expected minimum 1920x1080 horizontal, got {w}x{h})"
+                        )
 
                 file_size = final_file_path.stat().st_size
                 logger.info(

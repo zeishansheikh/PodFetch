@@ -349,3 +349,56 @@ def test_pipeline_drive_upload_failure_isolation(tmp_path: Path):
         rec_pin = db.get_video("pin_fail", platform="pinterest")
         assert rec_pin["status"] == VideoStatus.FAILED
         assert "Google Drive 503" in rec_pin["error_message"]
+
+
+def test_select_multisource_prioritizes_1080p_resolution():
+    """Verify that 1080p Pinterest videos are prioritized over 720p or lower-res candidates."""
+    cand_720 = VideoCandidate(
+        youtube_video_id="pin_720",
+        channel_id="pinterest",
+        channel_name="Pinterest",
+        title="720p clip",
+        youtube_url="https://pinterest.com/pin/pin_720",
+        platform="pinterest",
+        source_id="pin_720",
+        duration_seconds=15,
+        width=720,
+        height=1280,
+    )
+    cand_1080 = VideoCandidate(
+        youtube_video_id="pin_1080",
+        channel_id="pinterest",
+        channel_name="Pinterest",
+        title="1080p Full HD clip",
+        youtube_url="https://pinterest.com/pin/pin_1080",
+        platform="pinterest",
+        source_id="pin_1080",
+        duration_seconds=15,
+        width=1080,
+        height=1920,
+    )
+    cand_480 = VideoCandidate(
+        youtube_video_id="pin_480",
+        channel_id="pinterest",
+        channel_name="Pinterest",
+        title="480p clip",
+        youtube_url="https://pinterest.com/pin/pin_480",
+        platform="pinterest",
+        source_id="pin_480",
+        duration_seconds=15,
+        width=480,
+        height=854,
+    )
+
+    selected = select_multisource_candidates(
+        candidates_by_source={"pinterest": [cand_480, cand_720, cand_1080]},
+        min_count=1,
+        max_count=1,
+        historical_counts={},
+        exact_limit=1,
+        prefer_vertical=True,
+    )
+
+    assert len(selected) == 1
+    assert selected[0].source_id == "pin_1080"
+

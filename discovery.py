@@ -349,16 +349,36 @@ def select_multisource_candidates(
             continue
 
         if source_name == "pinterest":
-            # Sort Pinterest: prioritize vertical 9:16 when prefer_vertical is True
-            def sort_key_pinterest(c: VideoCandidate) -> Tuple[int, int]:
-                # Priority: vertical (2), unknown (1), horizontal (0)
+            # Sort Pinterest: prioritize true 1080x1920 Full HD, total pixels, vertical 9:16, and ideal duration
+            def sort_key_pinterest(c: VideoCandidate) -> Tuple[int, int, int, int]:
+                pixels = (c.width or 0) * (c.height or 0)
+                res_prio = 0
+                if c.width and c.height:
+                    is_vert = c.height >= c.width
+                    if is_vert:
+                        if c.width >= 1080 and c.height >= 1920:
+                            res_prio = 3
+                        elif c.width >= 1080 or c.height >= 1920:
+                            res_prio = 2
+                        elif c.width >= 720 or c.height >= 1280:
+                            res_prio = 1
+                    else:
+                        if c.height >= 1080 and c.width >= 1920:
+                            res_prio = 3
+                        elif c.height >= 1080 or c.width >= 1920:
+                            res_prio = 2
+                        elif c.height >= 720 or c.width >= 1280:
+                            res_prio = 1
+
+                # 2. Aspect ratio priority: vertical (2), unknown (1), horizontal (0)
                 if prefer_vertical:
                     v_prio = 2 if c.is_vertical is True else (1 if c.is_vertical is None else 0)
                 else:
                     v_prio = 0
-                # Secondary: prefer non-empty title or duration within range
+
+                # 3. Duration priority: within range 10-30s
                 dur_prio = 1 if (c.duration_seconds and 10 <= c.duration_seconds <= 30) else 0
-                return (v_prio, dur_prio)
+                return (res_prio, pixels, v_prio, dur_prio)
 
             sorted_p = sorted(cands, key=sort_key_pinterest, reverse=True)
             source_pools[source_name] = list(sorted_p)

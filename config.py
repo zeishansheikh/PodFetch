@@ -244,6 +244,7 @@ class AppConfig:
     prefer_vertical: bool = True
     min_video_duration_seconds: int = 10
     max_video_duration_seconds: int = 30
+    min_video_resolution: int = 1080
 
     # Pinterest Specific
     pinterest_keywords: List[str] = field(default_factory=lambda: list(DEFAULT_PINTEREST_KEYWORDS))
@@ -384,6 +385,19 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
         env_file=target_env,
     )
 
+    # Resolution configuration
+    raw_min_res = os.getenv("MIN_VIDEO_RESOLUTION")
+    if raw_min_res and raw_min_res.strip().isdigit():
+        min_video_resolution = int(raw_min_res.strip())
+    else:
+        dl_q = os.getenv("DOWNLOAD_QUALITY", "1080p").lower()
+        if "720" in dl_q:
+            min_video_resolution = 720
+        elif "480" in dl_q:
+            min_video_resolution = 480
+        else:
+            min_video_resolution = 1080
+
     return AppConfig(
         enabled_sources=enabled_sources,
         pinterest_enabled=pinterest_enabled,
@@ -391,6 +405,7 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
         prefer_vertical=_parse_bool(os.getenv("PREFER_VERTICAL", "true"), default=True),
         min_video_duration_seconds=int(os.getenv("MIN_VIDEO_DURATION_SECONDS", "10")),
         max_video_duration_seconds=int(os.getenv("MAX_VIDEO_DURATION_SECONDS", "30")),
+        min_video_resolution=min_video_resolution,
         pinterest_keywords=pinterest_keywords,
         pinterest_keywords_file=kw_file_path,
         pinterest_access_token=os.getenv("PINTEREST_ACCESS_TOKEN"),

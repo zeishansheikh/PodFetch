@@ -109,3 +109,48 @@ def test_reject_already_uploaded_video(test_setup):
     is_valid, reason = v_filter.evaluate_candidate(cand)
     assert not is_valid
     assert "Already processed" in reason
+
+
+def test_reject_low_resolution_pinterest_video(test_setup):
+    """Verify that lower-resolution videos (like 360p or 624x1032) are rejected under 1080p rule."""
+    _, config, v_filter = test_setup
+    config.min_video_resolution = 1080
+
+    low_res_cand = VideoCandidate(
+        youtube_video_id="pin_low_res",
+        channel_id="pinterest_nature",
+        channel_name="Pinterest",
+        title="Low Quality Clip",
+        youtube_url="https://pinterest.com/pin/pin_low_res",
+        platform="pinterest",
+        source_id="pin_low_res",
+        duration_seconds=15,
+        width=624,
+        height=1032,
+    )
+    is_valid, reason = v_filter.evaluate_candidate(low_res_cand)
+    assert not is_valid
+    assert "lower than required 1080p" in reason
+
+
+def test_accept_1080p_pinterest_video(test_setup):
+    """Verify that genuine 1080x1920 vertical videos are accepted."""
+    _, config, v_filter = test_setup
+    config.min_video_resolution = 1080
+
+    hd_cand = VideoCandidate(
+        youtube_video_id="pin_hd",
+        channel_id="pinterest_nature",
+        channel_name="Pinterest",
+        title="Full HD Nature Video",
+        youtube_url="https://pinterest.com/pin/pin_hd",
+        platform="pinterest",
+        source_id="pin_hd",
+        duration_seconds=15,
+        width=1080,
+        height=1920,
+    )
+    is_valid, reason = v_filter.evaluate_candidate(hd_cand)
+    assert is_valid
+    assert reason is None
+

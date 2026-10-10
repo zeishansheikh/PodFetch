@@ -108,6 +108,39 @@ class VideoFilter:
                         f"Duration ({candidate.duration_seconds}s) exceeds Pinterest maximum "
                         f"limit of {self.config.max_video_duration_seconds}s",
                     )
+
+            # Pinterest resolution filter: enforce minimum resolution (e.g. 1080p, 720p)
+            if self.config.min_video_resolution and candidate.width and candidate.height:
+                is_vert = candidate.height >= candidate.width
+                if self.config.min_video_resolution >= 1080:
+                    if is_vert:
+                        if candidate.width < 1080 and candidate.height < 1920:
+                            return (
+                                False,
+                                f"Resolution ({candidate.width}x{candidate.height}) is lower than required 1080p "
+                                f"(requires minimum 1080x1920 vertical or 1920x1080 horizontal)",
+                            )
+                    else:
+                        if candidate.height < 1080 and candidate.width < 1920:
+                            return (
+                                False,
+                                f"Resolution ({candidate.width}x{candidate.height}) is lower than required 1080p "
+                                f"(requires minimum 1920x1080)",
+                            )
+                elif self.config.min_video_resolution >= 720:
+                    if is_vert:
+                        if candidate.width < 720 and candidate.height < 1280:
+                            return (
+                                False,
+                                f"Resolution ({candidate.width}x{candidate.height}) is lower than required 720p HD",
+                            )
+                    else:
+                        if candidate.height < 720 and candidate.width < 1280:
+                            return (
+                                False,
+                                f"Resolution ({candidate.width}x{candidate.height}) is lower than required 720p HD",
+                            )
+
             return True, None
 
         # 4. Platform-specific filtering: YouTube

@@ -128,31 +128,25 @@ def parse_pin_from_dict(pin_data: Dict[str, Any], keyword: str = "") -> Optional
         is_video = True
         video_list = videos.get("video_list", {})
         if isinstance(video_list, dict):
-            # Select highest quality stream dictionary to extract dimension & duration
-            for fmt_key in ("V_1080P", "V_720P", "V_EXP7", "V_EXP6", "V_EXP5", "V_EXP4", "V_HLSV4"):
-                fmt_info = video_list.get(fmt_key)
+            max_pixels = 0
+            best_info = None
+            for fmt_info in video_list.values():
                 if isinstance(fmt_info, dict):
+                    w = fmt_info.get("width") or 0
+                    h = fmt_info.get("height") or 0
                     dur = fmt_info.get("duration")
-                    if dur is not None:
-                        # Duration in Pinterest is typically in milliseconds
+                    if duration_seconds is None and dur is not None:
                         duration_seconds = int(dur / 1000) if dur > 1000 else int(dur)
-                    width = fmt_info.get("width")
-                    height = fmt_info.get("height")
-                    break
+                    if (w * h) > max_pixels:
+                        max_pixels = w * h
+                        best_info = fmt_info
 
-            if not width or not height:
-                # Fallback to any stream entry
-                for fmt_info in video_list.values():
-                    if isinstance(fmt_info, dict):
-                        if not width:
-                            width = fmt_info.get("width")
-                        if not height:
-                            height = fmt_info.get("height")
-                        if duration_seconds is None and fmt_info.get("duration"):
-                            dur = fmt_info.get("duration")
-                            duration_seconds = int(dur / 1000) if dur > 1000 else int(dur)
-                        if width and height and duration_seconds is not None:
-                            break
+            if best_info:
+                width = best_info.get("width")
+                height = best_info.get("height")
+                dur = best_info.get("duration")
+                if dur is not None:
+                    duration_seconds = int(dur / 1000) if dur > 1000 else int(dur)
 
     # Check story_pin_data (Idea Pins format)
     if not is_video and pin_data.get("story_pin_data"):
