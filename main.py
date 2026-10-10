@@ -256,7 +256,7 @@ def execute_pipeline(
             assert drive_uploader is not None
             logger.info(f"Uploading to Google Drive: '{downloaded_path.name}'...")
             drive_file_id, drive_path = drive_uploader.upload_video(
-                downloaded_path, custom_filename=clean_filename
+                downloaded_path, custom_filename=clean_filename, platform=platform
             )
             uploaded_at = datetime.now(timezone.utc).isoformat()
 

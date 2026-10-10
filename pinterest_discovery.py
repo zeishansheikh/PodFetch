@@ -293,10 +293,91 @@ class PinterestDiscoverer:
                     parsed = parse_pin_from_dict(item, keyword=keyword)
                     if parsed:
                         pins.append(parsed)
-                return pins
+                if pins:
+                    return pins
         except Exception as e:
-            logger.warning(f"Pinterest Resource search query failed for '{keyword}': {e}")
-            return []
+            logger.warning(f"Pinterest Resource pin search query failed for '{keyword}': {e}")
+
+        # If direct unauthenticated pin search returned 0 results, query matching public boards
+        board_pins = self._query_board_feed_pins(keyword)
+        if board_pins:
+            return board_pins
+
+        return []
+
+    def _query_board_feed_pins(
+        self, keyword: str, max_boards: int = 3, pins_per_board: int = 20
+    ) -> List[PinterestPinMetadata]:
+        """Discover video Pins from public boards matching the keyword.
+
+        When unauthenticated direct pin search returns empty results, queries public boards
+        matching the search keyword and extracts video Pins from those boards.
+        """
+        board_data = {
+            "options": {
+                "query": keyword,
+                "scope": "boards",
+                "page_size": max_boards,
+            },
+            "context": {},
+        }
+        url = (
+            f"https://www.pinterest.com/resource/BaseSearchResource/get/?"
+            f"data={urllib.parse.quote(json.dumps(board_data))}"
+        )
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "X-Requested-With": "XMLHttpRequest",
+            "X-Pinterest-AppState": "active",
+            "X-Pinterest-PWS-Handler": "www/[username].js",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+        }
+        if self.config.pinterest_session_cookie:
+            headers["Cookie"] = self.config.pinterest_session_cookie
+
+        discovered_pins: List[PinterestPinMetadata] = []
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                boards = data.get("resource_response", {}).get("data", {}).get("results", [])
+
+            for b in boards[:max_boards]:
+                board_id = b.get("id")
+                if not board_id:
+                    continue
+
+                feed_data = {
+                    "options": {
+                        "board_id": str(board_id),
+                        "page_size": pins_per_board,
+                    },
+                    "context": {},
+                }
+                feed_url = (
+                    f"https://www.pinterest.com/resource/BoardFeedResource/get/?"
+                    f"data={urllib.parse.quote(json.dumps(feed_data))}"
+                )
+                try:
+                    feed_req = urllib.request.Request(feed_url, headers=headers)
+                    with urllib.request.urlopen(feed_req, timeout=10) as f_resp:
+                        f_data = json.loads(f_resp.read().decode("utf-8"))
+                        board_pins = f_data.get("resource_response", {}).get("data", []) or []
+                        for item in board_pins:
+                            if isinstance(item, dict):
+                                parsed = parse_pin_from_dict(item, keyword=keyword)
+                                if parsed:
+                                    discovered_pins.append(parsed)
+                except Exception as fe:
+                    logger.debug(f"Failed fetching board {board_id} feed: {fe}")
+
+        except Exception as be:
+            logger.debug(f"Board search fallback failed for '{keyword}': {be}")
+
+        return discovered_pins
 
     def fetch_pin_details(self, pin_id: str) -> Optional[PinterestPinMetadata]:
         """Fetch full PinResource metadata for a specific Pin ID to verify video media."""
@@ -330,14 +411,30 @@ class PinterestDiscoverer:
 
     def search_keyword(self, keyword: str) -> List[PinterestPinMetadata]:
         """Search Pinterest for matching Pins using permitted methods."""
+        cleaned_kw = keyword.strip()
+        # 0. Check if keyword is a direct Pin URL or Pin ID
+        pin_id_match = re.search(r"/pin/(\d+)", cleaned_kw)
+        if not pin_id_match and re.match(r"^\d{10,25}$", cleaned_kw):
+            direct_id = cleaned_kw
+        elif pin_id_match:
+            direct_id = pin_id_match.group(1)
+        else:
+            direct_id = None
+
+        if direct_id:
+            logger.info(f"Targeting direct Pinterest Pin ID: {direct_id}")
+            direct_pin = self.fetch_pin_details(direct_id)
+            if direct_pin:
+                return [direct_pin]
+
         # 1. Try official API first if token is available
         if self.config.pinterest_access_token:
-            api_results = self._query_official_api(keyword)
+            api_results = self._query_official_api(cleaned_kw)
             if api_results:
                 return api_results
 
         # 2. Try permitted Resource API
-        resource_results = self._query_resource_api(keyword)
+        resource_results = self._query_resource_api(cleaned_kw)
         if resource_results:
             return resource_results
 

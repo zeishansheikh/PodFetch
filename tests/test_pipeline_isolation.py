@@ -31,6 +31,8 @@ def test_env(tmp_path: Path):
         temp_dir=temp_dir,
         log_dir=log_dir,
         dry_run=False,
+        pinterest_enabled=False,
+        enabled_sources=["youtube"],
     )
     db = Database(db_path)
     return config, db, temp_dir

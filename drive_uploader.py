@@ -137,26 +137,24 @@ class GoogleDriveUploader:
         except Exception as e:
             raise GoogleDriveAuthError(f"Failed to build Google Drive API service: {e}")
 
-    def get_or_create_date_subfolder(
-        self, parent_folder_id: str, date_str: Optional[str] = None
+    def get_or_create_subfolder(
+        self, parent_folder_id: str, folder_name: str
     ) -> Tuple[str, str]:
-        """Find or create a subfolder for the specified date (e.g. '2026-10-08').
+        """Find or create a subfolder with the specified name inside a parent folder.
 
         Args:
             parent_folder_id: Google Drive ID of parent folder.
-            date_str: Date folder name in YYYY-MM-DD format (defaults to current UTC date).
+            folder_name: Subfolder name to find or create.
 
         Returns:
-            Tuple of (subfolder_id, subfolder_name).
+            Tuple of (subfolder_id, folder_name).
         """
         service = self.authenticate()
-        if not date_str:
-            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        safe_name = folder_name.replace("\\", "\\\\").replace("'", "\\'")
 
-        # Check if date subfolder already exists inside parent folder
         query = (
             f"'{parent_folder_id}' in parents and "
-            f"name = '{date_str}' and "
+            f"name = '{safe_name}' and "
             f"mimeType = 'application/vnd.google-apps.folder' and "
             f"trashed = false"
         )
@@ -169,12 +167,11 @@ class GoogleDriveUploader:
 
         if files:
             folder_id = files[0]["id"]
-            logger.debug(f"Found existing date subfolder '{date_str}' (ID: {folder_id})")
-            return folder_id, date_str
+            logger.debug(f"Found existing subfolder '{folder_name}' (ID: {folder_id})")
+            return folder_id, folder_name
 
-        # Create new subfolder
         folder_metadata = {
-            "name": date_str,
+            "name": folder_name,
             "mimeType": "application/vnd.google-apps.folder",
             "parents": [parent_folder_id],
         }
@@ -184,8 +181,24 @@ class GoogleDriveUploader:
             .execute()
         )
         folder_id = folder.get("id")
-        logger.info(f"Created new date subfolder '{date_str}' (ID: {folder_id})")
-        return folder_id, date_str
+        logger.info(f"Created new subfolder '{folder_name}' (ID: {folder_id})")
+        return folder_id, folder_name
+
+    def get_or_create_date_subfolder(
+        self, parent_folder_id: str, date_str: Optional[str] = None
+    ) -> Tuple[str, str]:
+        """Find or create a subfolder for the specified date (e.g. '2026-10-08').
+
+        Args:
+            parent_folder_id: Google Drive ID of parent folder.
+            date_str: Date folder name in YYYY-MM-DD format (defaults to current UTC date).
+
+        Returns:
+            Tuple of (subfolder_id, subfolder_name).
+        """
+        if not date_str:
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return self.get_or_create_subfolder(parent_folder_id, date_str)
 
     def check_file_exists(
         self, filename: str, target_folder_id: str
@@ -225,12 +238,14 @@ class GoogleDriveUploader:
         self,
         file_path: Path,
         custom_filename: Optional[str] = None,
+        platform: Optional[str] = None,
     ) -> Tuple[str, str]:
         """Perform chunked resumable upload of a video file to Google Drive.
 
         Args:
             file_path: Local path to the MP4 file.
             custom_filename: Optional sanitized filename for Drive.
+            platform: Optional platform ('pinterest', 'youtube') to organize into dedicated folder.
 
         Returns:
             Tuple of (drive_file_id, drive_path_string).
@@ -246,13 +261,36 @@ class GoogleDriveUploader:
         filename = custom_filename or file_path.name
         file_size = file_path.stat().st_size
 
-        # Resolve destination folder
+        # Resolve destination folder hierarchy
+        current_target_id = parent_folder_id
+        display_parts = [parent_folder_id]
+
+        # 1. Platform-specific subfolder (e.g. 'pinterest', 'youtube') to prevent mixing
+        effective_platform = platform
+        if not effective_platform:
+            fname_lower = (custom_filename or file_path.name).lower()
+            if "pinterest" in fname_lower:
+                effective_platform = "pinterest"
+            elif "youtube" in fname_lower:
+                effective_platform = "youtube"
+
+        if effective_platform:
+            platform_folder_name = effective_platform.strip().lower()
+            current_target_id, plat_name = self.get_or_create_subfolder(
+                current_target_id, platform_folder_name
+            )
+            display_parts.append(plat_name)
+
+        # 2. Date subfolder inside destination folder
         if self.config.use_date_subfolders:
-            target_folder_id, folder_name = self.get_or_create_date_subfolder(parent_folder_id)
-            drive_display_path = f"{parent_folder_id}/{folder_name}/{filename}"
-        else:
-            target_folder_id = parent_folder_id
-            drive_display_path = f"{parent_folder_id}/{filename}"
+            current_target_id, date_folder_name = self.get_or_create_date_subfolder(
+                current_target_id
+            )
+            display_parts.append(date_folder_name)
+
+        target_folder_id = current_target_id
+        display_parts.append(filename)
+        drive_display_path = "/".join(display_parts)
 
         # Duplicate check inside destination folder
         existing_id = self.check_file_exists(filename, target_folder_id)
