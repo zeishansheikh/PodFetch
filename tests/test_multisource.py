@@ -402,3 +402,57 @@ def test_select_multisource_prioritizes_1080p_resolution():
     assert len(selected) == 1
     assert selected[0].source_id == "pin_1080"
 
+
+def test_select_multisource_three_way_balance_and_instagram_priority():
+    """Verify that selection across YouTube, Pinterest, and Instagram balances sources and prioritizes popular audio."""
+    yt_cands = [make_yt_cand("yt_1", "ch_1", "YT Video")]
+    pin_cands = [make_pin_cand("pin_1", "Pin Video", is_vertical=True)]
+    ig_low = VideoCandidate(
+        youtube_video_id="",
+        channel_id="Artist 1",
+        channel_name="Artist 1",
+        title="Low Popularity Audio",
+        youtube_url="https://instagram.com/audio/ig_low",
+        platform="instagram",
+        source_id="ig_low",
+        canonical_url="https://instagram.com/audio/ig_low",
+        reel_count=100,
+        trend_rank=10,
+        popularity_score=10.0,
+    )
+    ig_high = VideoCandidate(
+        youtube_video_id="",
+        channel_id="Artist 2",
+        channel_name="Artist 2",
+        title="Top Trending Audio",
+        youtube_url="https://instagram.com/audio/ig_high",
+        platform="instagram",
+        source_id="ig_high",
+        canonical_url="https://instagram.com/audio/ig_high",
+        reel_count=150000,
+        trend_rank=1,
+        popularity_score=99.0,
+    )
+
+    selected = select_multisource_candidates(
+        candidates_by_source={
+            "youtube": yt_cands,
+            "pinterest": pin_cands,
+            "instagram": [ig_low, ig_high],
+        },
+        min_count=3,
+        max_count=3,
+        historical_counts={},
+        exact_limit=3,
+        prefer_vertical=True,
+    )
+
+    assert len(selected) == 3
+    platforms = {c.platform for c in selected}
+    assert platforms == {"youtube", "pinterest", "instagram"}
+
+    # Instagram item selected should be the top trending one
+    ig_selected = [c for c in selected if c.platform == "instagram"][0]
+    assert ig_selected.source_id == "ig_high"
+
+

@@ -234,18 +234,22 @@ class GoogleDriveUploader:
 
         return None
 
-    def upload_video(
+    def upload_file(
         self,
         file_path: Path,
         custom_filename: Optional[str] = None,
         platform: Optional[str] = None,
+        mimetype: Optional[str] = None,
+        description: Optional[str] = None,
     ) -> Tuple[str, str]:
-        """Perform chunked resumable upload of a video file to Google Drive.
+        """Perform chunked resumable upload of any media or metadata file to Google Drive.
 
         Args:
-            file_path: Local path to the MP4 file.
+            file_path: Local path to the file.
             custom_filename: Optional sanitized filename for Drive.
-            platform: Optional platform ('pinterest', 'youtube') to organize into dedicated folder.
+            platform: Optional platform ('instagram', 'pinterest', 'youtube') to organize into dedicated folder.
+            mimetype: Optional MIME type (auto-detected if None).
+            description: Optional file description metadata.
 
         Returns:
             Tuple of (drive_file_id, drive_path_string).
@@ -265,11 +269,13 @@ class GoogleDriveUploader:
         current_target_id = parent_folder_id
         display_parts = [parent_folder_id]
 
-        # 1. Platform-specific subfolder (e.g. 'pinterest', 'youtube') to prevent mixing
+        # 1. Platform-specific subfolder (e.g. 'instagram', 'pinterest', 'youtube') to prevent mixing
         effective_platform = platform
         if not effective_platform:
             fname_lower = (custom_filename or file_path.name).lower()
-            if "pinterest" in fname_lower:
+            if "instagram" in fname_lower:
+                effective_platform = "instagram"
+            elif "pinterest" in fname_lower:
                 effective_platform = "pinterest"
             elif "youtube" in fname_lower:
                 effective_platform = "youtube"
@@ -298,11 +304,29 @@ class GoogleDriveUploader:
             logger.info(f"Skipping upload: file already present in Drive as {existing_id}")
             return existing_id, drive_display_path
 
+        # Determine appropriate MIME type
+        if not mimetype:
+            suffix = file_path.suffix.lower()
+            if suffix == ".mp3":
+                resolved_mimetype = "audio/mpeg"
+            elif suffix in (".m4a", ".aac"):
+                resolved_mimetype = "audio/mp4"
+            elif suffix == ".wav":
+                resolved_mimetype = "audio/wav"
+            elif suffix == ".json":
+                resolved_mimetype = "application/json"
+            elif suffix == ".mp4":
+                resolved_mimetype = "video/mp4"
+            else:
+                resolved_mimetype = "application/octet-stream"
+        else:
+            resolved_mimetype = mimetype
+
         # 10 MB upload chunk size for reliability on cloud servers
         chunk_size = 10 * 1024 * 1024
         media = MediaFileUpload(
             str(file_path),
-            mimetype="video/mp4",
+            mimetype=resolved_mimetype,
             resumable=True,
             chunksize=chunk_size,
         )
@@ -310,12 +334,12 @@ class GoogleDriveUploader:
         file_metadata = {
             "name": filename,
             "parents": [target_folder_id],
-            "description": "Automated podcast video download",
+            "description": description or "Automated media download",
         }
 
         logger.info(
             f"Starting Drive upload for '{filename}' "
-            f"({file_size / (1024 * 1024):.2f} MB) -> {drive_display_path}"
+            f"({file_size / (1024 * 1024):.2f} MB, {resolved_mimetype}) -> {drive_display_path}"
         )
 
         request = service.files().create(
@@ -354,3 +378,18 @@ class GoogleDriveUploader:
 
         logger.info(f"Successfully uploaded to Google Drive! File ID: {uploaded_id}")
         return uploaded_id, drive_display_path
+
+    def upload_video(
+        self,
+        file_path: Path,
+        custom_filename: Optional[str] = None,
+        platform: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        """Perform chunked resumable upload of a video file to Google Drive (backwards compatibility)."""
+        return self.upload_file(
+            file_path=file_path,
+            custom_filename=custom_filename,
+            platform=platform,
+            mimetype="video/mp4",
+            description="Automated podcast video download",
+        )

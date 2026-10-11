@@ -36,6 +36,14 @@ class VideoCandidate:
     description: Optional[str] = None
     is_image: bool = False
 
+    media_type: str = "video"
+    artist: Optional[str] = None
+    audio_url: Optional[str] = None
+    popularity_score: Optional[float] = None
+    reel_count: Optional[int] = None
+    trend_rank: Optional[int] = None
+    is_authorized: bool = True
+
     def __post_init__(self) -> None:
         if not self.source_id:
             self.source_id = self.youtube_video_id
@@ -86,7 +94,33 @@ class VideoFilter:
         if candidate.is_image:
             return False, "Static image pins are excluded; only video media is permitted"
 
-        # 3. Platform-specific filtering: Pinterest
+        # 3. Platform-specific filtering: Instagram Trending Audio
+        if candidate.platform == "instagram":
+            if not candidate.is_authorized:
+                return False, "Audio track is not authorized for download or reuse"
+
+            if not candidate.audio_url:
+                return False, "No downloadable audio stream URL available"
+
+            if candidate.duration_seconds is not None:
+                min_audio = getattr(self.config, "min_audio_duration_seconds", 0)
+                max_audio = getattr(self.config, "max_audio_duration_seconds", None)
+                if min_audio > 0 and candidate.duration_seconds < min_audio:
+                    return (
+                        False,
+                        f"Duration ({candidate.duration_seconds}s) is less than Instagram minimum "
+                        f"required {min_audio}s",
+                    )
+                if max_audio is not None and candidate.duration_seconds > max_audio:
+                    return (
+                        False,
+                        f"Duration ({candidate.duration_seconds}s) exceeds Instagram maximum "
+                        f"limit of {max_audio}s",
+                    )
+
+            return True, None
+
+        # 4. Platform-specific filtering: Pinterest
         if candidate.platform == "pinterest":
             # Pinterest duration filter in seconds
             if candidate.duration_seconds is not None:

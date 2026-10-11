@@ -22,6 +22,9 @@ from filters import VideoCandidate, VideoFilter
 from logger import get_logger, log_podfetch_summary, setup_logger
 from pinterest_discovery import PinterestDiscoverer
 from pinterest_downloader import PinterestDownloader, PinterestDownloadError
+from audio_manifest import AudioManifestManager
+from instagram_discovery import InstagramAudioDiscoverer
+from instagram_downloader import InstagramAudioDownloader, InstagramDownloadError
 
 logger = get_logger("main")
 
@@ -73,7 +76,7 @@ def execute_pipeline(
     Returns:
         Exit code (0 for success, 1 if unhandled fatal error or failed videos).
     """
-    logger.info("Starting PodFetch YouTube + Pinterest to Google Drive automation run...")
+    logger.info("Starting PodFetch multi-source (YouTube, Pinterest, Instagram) automation run...")
     if config.dry_run:
         logger.info(">>> DRY RUN MODE ENABLED: No files will be downloaded or uploaded <<<")
 
@@ -82,10 +85,12 @@ def execute_pipeline(
         active_sources = ["youtube"]
     elif cli_source == "pinterest":
         active_sources = ["pinterest"]
+    elif cli_source == "instagram":
+        active_sources = ["instagram"]
     elif cli_source == "all":
-        active_sources = ["youtube", "pinterest"]
+        active_sources = ["youtube", "pinterest", "instagram"]
     else:
-        active_sources = [s for s in config.enabled_sources if s in ("youtube", "pinterest")]
+        active_sources = [s for s in config.enabled_sources if s in ("youtube", "pinterest", "instagram")]
 
     logger.info(f"Active sources for this run: {', '.join(active_sources)}")
 
@@ -113,9 +118,15 @@ def execute_pipeline(
 
     # 3. Discovery across enabled sources
     video_filter = VideoFilter(config, db)
-    candidates_by_source: Dict[str, List[VideoCandidate]] = {"youtube": [], "pinterest": []}
+    candidates_by_source: Dict[str, List[VideoCandidate]] = {
+        "youtube": [],
+        "pinterest": [],
+        "instagram": [],
+    }
     youtube_examined = 0
     pinterest_examined = 0
+    instagram_examined = 0
+    instagram_limitations: List[str] = []
     total_skipped = 0
 
     # Source 1: YouTube Discovery
@@ -164,8 +175,41 @@ def execute_pipeline(
         except Exception as pin_err:
             logger.error(f"Pinterest discovery failed (continuing with other sources): {pin_err}", exc_info=True)
 
+    # Source 3: Instagram Trending Audio Discovery
+    if "instagram" in active_sources:
+        try:
+            ig_discoverer = InstagramAudioDiscoverer(config, db)
+            ig_candidates, ig_examined, ig_skipped, ig_limits = ig_discoverer.discover_trending_audio()
+            instagram_examined = ig_examined
+            total_skipped += ig_skipped
+            instagram_limitations.extend(ig_limits)
+
+            accepted_ig, rejected_ig = video_filter.filter_candidates(ig_candidates)
+            total_skipped += len(rejected_ig)
+            candidates_by_source["instagram"] = accepted_ig
+            logger.info(f"Discovered {len(accepted_ig)} eligible Instagram audio candidate(s).")
+
+            # Register eligible Instagram candidates as DISCOVERED in DB
+            if not config.dry_run:
+                for ic in accepted_ig:
+                    db.upsert_video(
+                        source_id=ic.source_id,
+                        title=ic.title,
+                        canonical_url=ic.canonical_url,
+                        platform="instagram",
+                        channel_id=ic.channel_id,
+                        channel_name=ic.channel_name,
+                        search_keyword=ic.search_keyword,
+                        duration=ic.duration_seconds,
+                        status=VideoStatus.DISCOVERED,
+                    )
+        except Exception as ig_err:
+            err_msg = f"Instagram discovery failed (continuing with other sources): {ig_err}"
+            logger.error(err_msg, exc_info=True)
+            instagram_limitations.append(err_msg)
+
     total_eligible = sum(len(cands) for cands in candidates_by_source.values())
-    logger.info(f"Total eligible candidate video(s) across all sources: {total_eligible}")
+    logger.info(f"Total eligible candidate media across all sources: {total_eligible}")
 
     # 4. Multi-Source Fair & Balanced Selection
     historical_counts = db.get_channel_selection_counts()
@@ -178,7 +222,7 @@ def execute_pipeline(
         prefer_vertical=config.prefer_vertical,
     )
 
-    logger.info(f"Selected {len(selected_candidates)} video(s) for this run.")
+    logger.info(f"Selected {len(selected_candidates)} item(s) for this run.")
     for idx, cand in enumerate(selected_candidates, start=1):
         dur_str = f"{cand.duration_seconds}s" if cand.duration_seconds else "Unknown dur"
         logger.info(
@@ -190,9 +234,11 @@ def execute_pipeline(
     uploaded_count = 0
     failed_count = 0
 
-    # Initialize downloaders
+    # Initialize downloaders and manifest
     youtube_downloader = VideoDownloader(config)
     pinterest_downloader = PinterestDownloader(config)
+    instagram_downloader = InstagramAudioDownloader(config)
+    manifest_manager = AudioManifestManager(config.instagram_audio_manifest_path)
 
     # 5. Process Selected Candidates with fallback queue recovery
     target_uploads = len(selected_candidates)
@@ -209,12 +255,20 @@ def execute_pipeline(
         source_id = candidate.source_id or candidate.youtube_video_id
         keyword_or_channel = candidate.search_keyword or candidate.channel_name
 
-        clean_filename = generate_source_filename(
-            platform=platform,
-            keyword_or_channel=keyword_or_channel,
-            source_id=source_id,
-            extension="mp4",
-        )
+        if platform == "instagram":
+            clean_filename = generate_source_filename(
+                platform="instagram",
+                keyword_or_channel=candidate.artist or candidate.channel_name or "audio",
+                source_id=source_id,
+                extension="mp3",
+            )
+        else:
+            clean_filename = generate_source_filename(
+                platform=platform,
+                keyword_or_channel=keyword_or_channel,
+                source_id=source_id,
+                extension="mp4",
+            )
 
         if config.dry_run:
             logger.info(
@@ -227,9 +281,7 @@ def execute_pipeline(
 
         # Real Execution Flow
         downloaded_path: Optional[Path] = None
-        downloader_in_use = (
-            pinterest_downloader if platform == "pinterest" else youtube_downloader
-        )
+        downloaded_meta_path: Optional[Path] = None
 
         try:
             # Step A: Update status to DOWNLOADING
@@ -248,11 +300,18 @@ def execute_pipeline(
                 status=VideoStatus.DOWNLOADING,
             )
 
-            # Step B: Download video
-            logger.info(f"Downloading [{platform.upper()}]: '{candidate.title}' ({source_id})...")
-            downloaded_path = downloader_in_use.download_video(candidate)
-            downloaded_at = datetime.now(timezone.utc).isoformat()
+            # Step B: Download media
+            if platform == "instagram":
+                logger.info(f"Downloading [INSTAGRAM AUDIO]: '{candidate.title}' by '{candidate.artist}'...")
+                downloaded_path, downloaded_meta_path = instagram_downloader.download_audio(candidate)
+            elif platform == "pinterest":
+                logger.info(f"Downloading [PINTEREST]: '{candidate.title}' ({source_id})...")
+                downloaded_path = pinterest_downloader.download_video(candidate)
+            else:
+                logger.info(f"Downloading [YOUTUBE]: '{candidate.title}' ({source_id})...")
+                downloaded_path = youtube_downloader.download_video(candidate)
 
+            downloaded_at = datetime.now(timezone.utc).isoformat()
             db.update_status(
                 source_id=source_id,
                 status=VideoStatus.DOWNLOADED,
@@ -263,10 +322,32 @@ def execute_pipeline(
 
             # Step C: Upload to Google Drive
             assert drive_uploader is not None
-            logger.info(f"Uploading to Google Drive: '{downloaded_path.name}'...")
-            drive_file_id, drive_path = drive_uploader.upload_video(
-                downloaded_path, custom_filename=clean_filename, platform=platform
-            )
+            meta_file_id: Optional[str] = None
+            if platform == "instagram":
+                logger.info(f"Uploading Instagram audio to Google Drive: '{downloaded_path.name}'...")
+                drive_file_id, drive_path = drive_uploader.upload_file(
+                    file_path=downloaded_path,
+                    custom_filename=clean_filename,
+                    platform="instagram",
+                    mimetype="audio/mpeg",
+                    description=f"Instagram Trending Audio: {candidate.title} by {candidate.artist}",
+                )
+
+                if downloaded_meta_path and downloaded_meta_path.exists():
+                    logger.info(f"Uploading companion metadata to Google Drive: '{downloaded_meta_path.name}'...")
+                    meta_file_id, _ = drive_uploader.upload_file(
+                        file_path=downloaded_meta_path,
+                        custom_filename=downloaded_meta_path.name,
+                        platform="instagram",
+                        mimetype="application/json",
+                        description=f"Instagram Trending Audio Metadata: {candidate.title}",
+                    )
+            else:
+                logger.info(f"Uploading to Google Drive: '{downloaded_path.name}'...")
+                drive_file_id, drive_path = drive_uploader.upload_video(
+                    downloaded_path, custom_filename=clean_filename, platform=platform
+                )
+
             uploaded_at = datetime.now(timezone.utc).isoformat()
 
             # Step D: Update DB status to UPLOADED
@@ -283,11 +364,35 @@ def execute_pipeline(
                 f"Completed processing for '{candidate.title}' (Drive ID: {drive_file_id})"
             )
 
-        except (DownloadError, PinterestDownloadError, GoogleDriveUploadError, Exception) as err:
+            # Step E: Update audio manifest for downstream video agents
+            if platform == "instagram":
+                manifest_manager.add_or_update_track(
+                    audio_id=source_id,
+                    title=candidate.title,
+                    artist=candidate.artist or candidate.channel_name or "Instagram",
+                    source_url=candidate.canonical_url or "",
+                    discovered_at=candidate.published_at.isoformat() if candidate.published_at else None,
+                    duration_seconds=candidate.duration_seconds,
+                    popularity={
+                        "reel_count": candidate.reel_count,
+                        "trend_rank": candidate.trend_rank,
+                        "popularity_score": candidate.popularity_score,
+                    },
+                    is_authorized=candidate.is_authorized,
+                    audio_file=downloaded_path.name,
+                    local_path=str(downloaded_path),
+                    drive_file_id=drive_file_id,
+                    drive_path=drive_path,
+                    metadata_drive_file_id=meta_file_id,
+                    status="UPLOADED",
+                    uploaded_at=uploaded_at,
+                )
+
+        except (DownloadError, PinterestDownloadError, InstagramDownloadError, GoogleDriveUploadError, Exception) as err:
             failed_count += 1
             error_msg = str(err)
             logger.error(
-                f"Failed processing [{platform}] video '{candidate.title}' ({source_id}): {error_msg}",
+                f"Failed processing [{platform}] item '{candidate.title}' ({source_id}): {error_msg}",
                 exc_info=True,
             )
             db.update_status(
@@ -306,8 +411,16 @@ def execute_pipeline(
                 )
 
         finally:
-            # Step E: Delete temporary local file after upload attempt
-            if downloaded_path and downloaded_path.exists():
+            # Step F: Delete temporary local files after upload attempt
+            if platform == "instagram":
+                if downloaded_path and downloaded_path.exists():
+                    instagram_downloader.cleanup_file(downloaded_path)
+                if downloaded_meta_path and downloaded_meta_path.exists():
+                    instagram_downloader.cleanup_file(downloaded_meta_path)
+            elif downloaded_path and downloaded_path.exists():
+                downloader_in_use = (
+                    pinterest_downloader if platform == "pinterest" else youtube_downloader
+                )
                 downloader_in_use.cleanup_file(downloaded_path)
 
     # 6. Output final PODFETCH SUMMARY report
@@ -320,6 +433,8 @@ def execute_pipeline(
         downloaded=downloaded_count,
         uploaded=uploaded_count,
         failed=failed_count,
+        instagram_candidates=instagram_examined,
+        limitations=instagram_limitations,
         logger=logger,
     )
 
@@ -329,7 +444,7 @@ def execute_pipeline(
 def main() -> None:
     """CLI parser and orchestration runner."""
     parser = argparse.ArgumentParser(
-        description="Headless automation for discovering and downloading YouTube & Pinterest videos and uploading to Google Drive.",
+        description="Headless automation for discovering and downloading YouTube, Pinterest videos, and Instagram Trending Audio, and uploading to Google Drive.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -340,9 +455,9 @@ def main() -> None:
     parser.add_argument(
         "--source",
         type=str,
-        choices=["youtube", "pinterest", "all"],
+        choices=["youtube", "pinterest", "instagram", "all"],
         default=None,
-        help="Specify source to run: 'youtube', 'pinterest', or 'all' (default: uses configured ENABLED_SOURCES).",
+        help="Specify source to run: 'youtube', 'pinterest', 'instagram', or 'all' (default: uses configured ENABLED_SOURCES).",
     )
     parser.add_argument(
         "--limit",
@@ -391,14 +506,22 @@ def main() -> None:
             config.enabled_sources = ["youtube"]
             config.youtube_enabled = True
             config.pinterest_enabled = False
+            config.instagram_enabled = False
         elif args.source == "pinterest":
             config.enabled_sources = ["pinterest"]
             config.youtube_enabled = False
             config.pinterest_enabled = True
+            config.instagram_enabled = False
+        elif args.source == "instagram":
+            config.enabled_sources = ["instagram"]
+            config.youtube_enabled = False
+            config.pinterest_enabled = False
+            config.instagram_enabled = True
         elif args.source == "all":
-            config.enabled_sources = ["youtube", "pinterest"]
+            config.enabled_sources = ["youtube", "pinterest", "instagram"]
             config.youtube_enabled = True
             config.pinterest_enabled = True
+            config.instagram_enabled = True
 
     # Setup project logger
     setup_logger(log_dir=config.log_dir)

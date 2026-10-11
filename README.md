@@ -1,6 +1,6 @@
-# PodFetch - Multi-Source (YouTube + Pinterest) to Google Drive Automation
+# PodFetch - Multi-Source (YouTube + Pinterest + Instagram) to Google Drive Automation
 
-A production-ready, unattended Python automation system that discovers and downloads videos from **both YouTube and Pinterest**, applies strict filtering (duration, aspect ratio, static image removal, age, shorts/livestreams), and uploads eligible videos to a designated Google Drive folder.
+A production-ready, unattended Python automation system that discovers and downloads content from **YouTube**, **Pinterest**, and **Instagram Trending Audio**, applies strict filtering (duration, aspect ratio, audio licensing, static image removal, shorts/livestreams), and uploads eligible files to a designated Google Drive folder with dedicated platform isolation.
 
 Built for headless Linux cloud machines, Cron jobs, systemd timers, Docker containers, and CI/CD schedulers.
 
@@ -8,25 +8,23 @@ Built for headless Linux cloud machines, Cron jobs, systemd timers, Docker conta
 
 ## Features
 
-- **Multi-Source Video Ingestion**: Discovers videos from both **YouTube channels** and **Pinterest keyword searches**.
+- **Multi-Source Ingestion**:
+  - **YouTube**: Discovers podcast videos from configured channels.
+  - **Pinterest**: Discovers aesthetic videos matching configured keywords.
+  - **Instagram Trending Audio**: Discovers trending audio tracks via official Meta Graph API, collects metadata (title, artist, reel count, trend rank, popularity score), and verifies authorized licensing.
+- **Audio Manifest Generation (`audio_manifest.json`)**:
+  - Maintains a persistent, atomic JSON manifest that downstream video-processing agents can query to find newly available audio tracks, drive file IDs, and popularity indicators.
+- **Graceful API Limitation Reporting**:
+  - If official Instagram API credentials or permissions are unavailable, PodFetch reports the exact limitation clearly and cleanly without fabricating fake audio or crashing.
 - **Headless & Unattended**: No GUI, no browser popups, zero manual intervention required.
-- **Configurable Keywords without Code Changes**: Add, edit, or remove Pinterest keywords directly in `pinterest_keywords.txt` or `.env`.
-- **Intelligent Filtering & Format Verification**:
-  - **Pinterest**: Excludes static images/photos; enforces duration range (`10s - 30s` by default); prioritizes vertical 9:16 aesthetic videos.
-  - **YouTube**: Excludes YouTube Shorts and livestreams; enforces minimum podcast duration (`>= 20 minutes`).
-  - **FFprobe Verification**: Validates downloaded media with FFprobe to ensure genuine, playable video streams prior to upload.
-- **Fair & Balanced Selection**: Randomly selects between `MIN_VIDEOS_PER_RUN` and `MAX_VIDEOS_PER_RUN` (e.g. 1 to 3) while balancing selections across enabled platforms and channels.
-- **Standardized Naming**:
-  - `Pinterest - {keyword} - {PIN_ID}.mp4`
-  - `YouTube - {channel} - {VIDEO_ID}.mp4`
-- **Robust Deduplication & Database Migration**:
+- **Companion Metadata**: Companion `.json` metadata files are uploaded alongside each downloaded audio file to Google Drive.
+- **Dedicated Google Drive Isolation**:
+  - Separate folders for each platform: `google_drive_folder_id/instagram/`, `google_drive_folder_id/pinterest/`, and `google_drive_folder_id/youtube/`.
+- **Fair & Balanced Selection**: Balances selections across enabled platforms in a round-robin strategy, prioritizing top trending Instagram audio, vertical 9:16 Pinterest videos, and recent YouTube uploads.
+- **Robust SQLite Deduplication**:
   - Persistent SQLite database (`downloads.db`) with composite unique constraint on `(platform, source_id)`.
-  - Merges keywords when a video is discovered across multiple searches.
 - **Isolated Fault Tolerance**:
-  - If Pinterest search or download fails, YouTube continues normally; if YouTube fails, Pinterest continues normally.
-  - If Google Drive upload fails on one file, other files still proceed and the failed item is marked in SQLite for retry.
-- **Crash Recovery & Safe Resume**:
-  - Reconciles interrupted jobs automatically on startup without duplicate downloads.
+  - Failure in one source or file does not interrupt remaining downloads or sources.
 
 ---
 
@@ -34,7 +32,7 @@ Built for headless Linux cloud machines, Cron jobs, systemd timers, Docker conta
 
 - **Operating System**: Linux (Ubuntu 20.04/22.04/24.04, Debian, Rocky, RHEL, CentOS), macOS, or Windows.
 - **Python**: Python `3.9` or newer (tested on Python `3.12`).
-- **FFmpeg & FFprobe**: Required by `yt-dlp` to merge video/audio streams and validate media streams.
+- **FFmpeg & FFprobe**: Required by `yt-dlp` to merge streams and validate media integrity.
   - Ubuntu/Debian: `sudo apt update && sudo apt install -y ffmpeg`
   - RHEL/Rocky: `sudo dnf install -y ffmpeg`
   - macOS: `brew install ffmpeg`
@@ -49,22 +47,26 @@ PodFetch/
 ├── config.py                # Strongly-typed configuration loader & validator
 ├── database.py              # SQLite persistence, (platform, source_id) deduplication & recovery
 ├── discovery.py             # Channel inspection & multi-source candidate selection
+├── audio_manifest.py        # Audio manifest manager (audio_manifest.json) for video agents
+├── instagram_discovery.py   # Meta Graph API trending audio discovery & limitation reporting
+├── instagram_downloader.py  # Instagram audio stream downloader & companion metadata writer
 ├── pinterest_discovery.py   # Pinterest API & resource search, image filtering, keyword tracking
 ├── pinterest_downloader.py  # Pinterest video downloader with yt-dlp & FFprobe verification
 ├── downloader.py            # YouTube downloader with retries & exponential backoff
-├── filters.py               # Candidate filtering rules (duration, vertical aspect, images)
-├── drive_uploader.py        # Google Drive v3 chunked resumable uploader
+├── filters.py               # Candidate filtering rules (duration, authorization, vertical aspect)
+├── drive_uploader.py        # Google Drive v3 chunked uploader with audio/json/video support
 ├── filename_utils.py        # Sanitization and standardized source naming utilities
 ├── logger.py                # Console and rotating file logger (logs/automation.log)
 ├── setup_oauth.py           # OAuth helper script to generate token.json
 ├── pinterest_keywords.txt   # Configurable Pinterest search keywords (one per line)
+├── audio_manifest.json      # Persistent audio manifest for downstream video agents
 ├── requirements.txt         # Python package dependencies
 ├── .env                     # Production configuration & credentials
 ├── .env.example             # Template configuration file
 ├── downloads.db             # Persistent SQLite database (auto-migrated)
 ├── logs/                    # Execution logs (auto-created)
 ├── temp/                    # Temporary download workspace (auto-cleaned)
-└── tests/                   # Automated test suite (38 unit & integration tests)
+└── tests/                   # Automated test suite (51 unit & integration tests)
 ```
 
 ---
@@ -202,6 +204,11 @@ python main.py --source youtube
 Run only Pinterest:
 ```bash
 python main.py --source pinterest
+```
+
+Run only Instagram Trending Audio:
+```bash
+python main.py --source instagram
 ```
 
 Run all sources:

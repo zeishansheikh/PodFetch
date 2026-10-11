@@ -398,6 +398,17 @@ def select_multisource_candidates(
             )
             source_pools[source_name] = list(yt_ordered)
 
+        elif source_name == "instagram":
+            # Sort Instagram: prioritize popularity_score, reel_count, then trend_rank (lower rank number is better)
+            def sort_key_instagram(c: VideoCandidate) -> Tuple[float, int, int]:
+                pop = c.popularity_score or 0.0
+                reels = c.reel_count or 0
+                rank_inv = -c.trend_rank if c.trend_rank is not None else -999999
+                return (pop, reels, rank_inv)
+
+            sorted_ig = sorted(cands, key=sort_key_instagram, reverse=True)
+            source_pools[source_name] = list(sorted_ig)
+
         else:
             source_pools[source_name] = list(cands)
 

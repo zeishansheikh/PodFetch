@@ -205,13 +205,18 @@ def _parse_keywords(
     return keywords if keywords else list(DEFAULT_PINTEREST_KEYWORDS)
 
 
-def _parse_sources(raw_val: Optional[str], youtube_enabled: bool, pinterest_enabled: bool) -> List[str]:
+def _parse_sources(
+    raw_val: Optional[str],
+    youtube_enabled: bool,
+    pinterest_enabled: bool,
+    instagram_enabled: bool = True,
+) -> List[str]:
     """Determine enabled sources from ENABLED_SOURCES string and boolean flags."""
     sources: List[str] = []
     if raw_val:
         for s in raw_val.split(","):
             cleaned = s.strip().lower()
-            if cleaned in ("youtube", "pinterest") and cleaned not in sources:
+            if cleaned in ("youtube", "pinterest", "instagram") and cleaned not in sources:
                 sources.append(cleaned)
 
     # If ENABLED_SOURCES wasn't set, build from individual flags
@@ -220,6 +225,8 @@ def _parse_sources(raw_val: Optional[str], youtube_enabled: bool, pinterest_enab
             sources.append("youtube")
         if pinterest_enabled:
             sources.append("pinterest")
+        if instagram_enabled:
+            sources.append("instagram")
 
     # Filter out sources explicitly disabled via individual flags
     final_sources: List[str] = []
@@ -227,6 +234,8 @@ def _parse_sources(raw_val: Optional[str], youtube_enabled: bool, pinterest_enab
         if s == "youtube" and not youtube_enabled:
             continue
         if s == "pinterest" and not pinterest_enabled:
+            continue
+        if s == "instagram" and not instagram_enabled:
             continue
         final_sources.append(s)
 
@@ -238,13 +247,22 @@ class AppConfig:
     """Strongly typed application configuration."""
 
     # Sources & Discovery Settings
-    enabled_sources: List[str] = field(default_factory=lambda: ["youtube", "pinterest"])
+    enabled_sources: List[str] = field(default_factory=lambda: ["youtube", "pinterest", "instagram"])
     pinterest_enabled: bool = True
     youtube_enabled: bool = True
+    instagram_enabled: bool = True
     prefer_vertical: bool = True
     min_video_duration_seconds: int = 10
     max_video_duration_seconds: int = 30
     min_video_resolution: int = 1080
+
+    # Instagram Specific
+    instagram_access_token: Optional[str] = None
+    instagram_account_id: Optional[str] = None
+    instagram_api_base_url: str = "https://graph.facebook.com/v21.0"
+    instagram_audio_manifest_path: Path = field(default_factory=lambda: Path("audio_manifest.json"))
+    min_audio_duration_seconds: int = 5
+    max_audio_duration_seconds: Optional[int] = 90
 
     # Pinterest Specific
     pinterest_keywords: List[str] = field(default_factory=lambda: list(DEFAULT_PINTEREST_KEYWORDS))
@@ -321,7 +339,9 @@ class AppConfig:
             raise ValueError("MAX_VIDEO_AGE_DAYS must be >= 1")
 
         if not self.enabled_sources:
-            raise ValueError("No sources enabled! Check ENABLED_SOURCES, YOUTUBE_ENABLED, and PINTEREST_ENABLED.")
+            raise ValueError(
+                "No sources enabled! Check ENABLED_SOURCES, YOUTUBE_ENABLED, PINTEREST_ENABLED, and INSTAGRAM_ENABLED."
+            )
 
         if "youtube" in self.enabled_sources and not self.youtube_channels:
             raise ValueError(
@@ -376,8 +396,9 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
     # Source flags
     youtube_enabled = _parse_bool(os.getenv("YOUTUBE_ENABLED", "true"), default=True)
     pinterest_enabled = _parse_bool(os.getenv("PINTEREST_ENABLED", "true"), default=True)
-    raw_sources = os.getenv("ENABLED_SOURCES", "youtube,pinterest")
-    enabled_sources = _parse_sources(raw_sources, youtube_enabled, pinterest_enabled)
+    instagram_enabled = _parse_bool(os.getenv("INSTAGRAM_ENABLED", "true"), default=True)
+    raw_sources = os.getenv("ENABLED_SOURCES", "youtube,pinterest,instagram")
+    enabled_sources = _parse_sources(raw_sources, youtube_enabled, pinterest_enabled, instagram_enabled)
 
     # Keywords configuration
     kw_file_path = os.getenv("PINTEREST_KEYWORDS_FILE", "pinterest_keywords.txt")
@@ -401,14 +422,24 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
         else:
             min_video_resolution = 1080
 
+    max_audio_str = os.getenv("MAX_AUDIO_DURATION_SECONDS")
+    max_audio_duration_seconds = int(max_audio_str.strip()) if max_audio_str and max_audio_str.strip().isdigit() else None
+
     return AppConfig(
         enabled_sources=enabled_sources,
         pinterest_enabled=pinterest_enabled,
         youtube_enabled=youtube_enabled,
+        instagram_enabled=instagram_enabled,
         prefer_vertical=_parse_bool(os.getenv("PREFER_VERTICAL", "true"), default=True),
         min_video_duration_seconds=int(os.getenv("MIN_VIDEO_DURATION_SECONDS", "10")),
         max_video_duration_seconds=int(os.getenv("MAX_VIDEO_DURATION_SECONDS", "30")),
         min_video_resolution=min_video_resolution,
+        instagram_access_token=os.getenv("INSTAGRAM_ACCESS_TOKEN"),
+        instagram_account_id=os.getenv("INSTAGRAM_ACCOUNT_ID"),
+        instagram_api_base_url=os.getenv("INSTAGRAM_API_BASE_URL", "https://graph.facebook.com/v21.0"),
+        instagram_audio_manifest_path=Path(os.getenv("INSTAGRAM_AUDIO_MANIFEST_PATH", "audio_manifest.json")),
+        min_audio_duration_seconds=int(os.getenv("MIN_AUDIO_DURATION_SECONDS", "5")),
+        max_audio_duration_seconds=max_audio_duration_seconds,
         pinterest_keywords=pinterest_keywords,
         pinterest_keywords_file=kw_file_path,
         pinterest_access_token=os.getenv("PINTEREST_ACCESS_TOKEN"),

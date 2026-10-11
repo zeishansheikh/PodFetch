@@ -89,6 +89,8 @@ def log_podfetch_summary(
     downloaded: int,
     uploaded: int,
     failed: int,
+    instagram_candidates: int = 0,
+    limitations: Optional[List[str]] = None,
     logger: Optional[logging.Logger] = None,
 ) -> None:
     """Output the exact PODFETCH SUMMARY execution report format specified in requirements."""
@@ -99,14 +101,21 @@ def log_podfetch_summary(
         "",
         f"YouTube candidates: {youtube_candidates}",
         f"Pinterest candidates: {pinterest_candidates}",
+        f"Instagram audio candidates: {instagram_candidates}",
         f"Duplicates skipped: {duplicates_skipped}",
-        f"Eligible videos: {eligible_videos}",
+        f"Eligible items: {eligible_videos}",
         f"Selected: {selected}",
         f"Downloaded: {downloaded}",
         f"Uploaded to Google Drive: {uploaded}",
         f"Failed: {failed}",
-        "",
     ]
+    if limitations:
+        summary_lines.append("")
+        summary_lines.append("API Limitations / Notices:")
+        for lim in limitations:
+            summary_lines.append(f"  - {lim}")
+    summary_lines.append("")
+
     summary_text = "\n".join(summary_lines)
     for line in summary_lines:
         if line.strip():
