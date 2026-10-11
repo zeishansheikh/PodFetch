@@ -46,7 +46,7 @@ def test_config(tmp_path: Path) -> AppConfig:
         instagram_account_id="17841400000000000",
         instagram_audio_manifest_path=manifest_path,
         min_audio_duration_seconds=5,
-        max_audio_duration_seconds=90,
+        max_audio_duration_seconds=420,
         google_drive_folder_id="mock_drive_folder_id",
         dry_run=False,
     )
@@ -536,4 +536,50 @@ def test_instagram_discovery_ig_audio_endpoint_success(test_config: AppConfig, t
         assert cand.duration_seconds == 17
         assert cand.canonical_url == "https://www.instagram.com/reels/audio/28620968620889095/"
         assert cand.is_authorized is True
+
+
+def test_instagram_poetry_voiceover_filter_rejection(test_config: AppConfig, test_db: Database):
+    """Verify that user voiceovers, poetry, and reel audio without official songs are rejected."""
+    vfilter = VideoFilter(test_config, test_db)
+
+    # 1. 'Original audio' voiceover reel
+    poetry_cand = VideoCandidate(
+        youtube_video_id="",
+        channel_id="_zuber.04",
+        channel_name="_zuber.04",
+        title="Original audio",
+        youtube_url="https://instagram.com/audio/voiceover_1",
+        platform="instagram",
+        source_id="voiceover_1",
+        canonical_url="https://instagram.com/audio/voiceover_1",
+        duration_seconds=17,
+        media_type="audio",
+        artist="_zuber.04",
+        audio_url="https://cdn.example.com/voiceover.mp3",
+        is_authorized=True,
+    )
+    is_ok, reason = vfilter.evaluate_candidate(poetry_cand)
+    assert is_ok is False
+    assert "voiceover/poetry" in reason
+
+    # 2. Genuine official song track
+    song_cand = VideoCandidate(
+        youtube_video_id="",
+        channel_id="Talha Anjum",
+        channel_name="Talha Anjum",
+        title="Told My Brother",
+        youtube_url="https://instagram.com/audio/song_1",
+        platform="instagram",
+        source_id="song_1",
+        canonical_url="https://instagram.com/audio/song_1",
+        duration_seconds=216,
+        media_type="audio",
+        artist="Talha Anjum, Umair",
+        audio_url="ytsearch1:Told My Brother Talha Anjum, Umair official audio",
+        is_authorized=True,
+    )
+    is_ok, reason = vfilter.evaluate_candidate(song_cand)
+    assert is_ok is True
+    assert reason is None
+
 

@@ -362,6 +362,9 @@ class InstagramAudioDiscoverer:
                         list(executor.map(_fetch_track_detail, items_needing_detail))
 
                 for meta in parsed_metas:
+                    if not meta.audio_url and meta.is_authorized and meta.title and meta.artist and meta.artist != "Instagram Artist":
+                        meta.audio_url = f"ytsearch1:{meta.title} {meta.artist} official audio"
+
                     cand = meta.to_candidate()
                     candidates.append(cand)
 

@@ -102,6 +102,12 @@ class VideoFilter:
             if not candidate.audio_url:
                 return False, "No downloadable audio stream URL available"
 
+            # Exclude user reel voiceovers, poetry, shayari, dialogues
+            title_clean = (candidate.title or "").strip().lower()
+            poetry_keywords = ["original audio", "original sound", "poetry", "shayari", "dialogue", "speech", "status"]
+            if title_clean in ("original audio", "original sound") or any(pk in title_clean for pk in poetry_keywords[2:]):
+                return False, f"Track '{candidate.title}' is a user voiceover/poetry reel clip, not an official music song"
+
             if candidate.duration_seconds is not None:
                 min_audio = getattr(self.config, "min_audio_duration_seconds", 0)
                 max_audio = getattr(self.config, "max_audio_duration_seconds", None)

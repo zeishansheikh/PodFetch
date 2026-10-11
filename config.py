@@ -264,10 +264,10 @@ class AppConfig:
     instagram_account_id: Optional[str] = DEFAULT_INSTAGRAM_ACCOUNT_ID
     instagram_api_base_url: str = "https://graph.facebook.com/v21.0"
     instagram_audio_manifest_path: Path = field(default_factory=lambda: Path("audio_manifest.json"))
-    instagram_audio_type: str = "original_sound"
+    instagram_audio_type: str = "music"
     instagram_drive_folder_name: str = "trending songs"
     min_audio_duration_seconds: int = 5
-    max_audio_duration_seconds: Optional[int] = 90
+    max_audio_duration_seconds: Optional[int] = 420
 
     # Pinterest Specific
     pinterest_keywords: List[str] = field(default_factory=lambda: list(DEFAULT_PINTEREST_KEYWORDS))
@@ -443,7 +443,7 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
         instagram_account_id=os.getenv("INSTAGRAM_ACCOUNT_ID") or DEFAULT_INSTAGRAM_ACCOUNT_ID,
         instagram_api_base_url=os.getenv("INSTAGRAM_API_BASE_URL", "https://graph.facebook.com/v21.0"),
         instagram_audio_manifest_path=Path(os.getenv("INSTAGRAM_AUDIO_MANIFEST_PATH", "audio_manifest.json")),
-        instagram_audio_type=os.getenv("INSTAGRAM_AUDIO_TYPE", "original_sound").strip(),
+        instagram_audio_type=os.getenv("INSTAGRAM_AUDIO_TYPE", "music").strip(),
         instagram_drive_folder_name=os.getenv("INSTAGRAM_DRIVE_FOLDER_NAME", "trending songs").strip(),
         min_audio_duration_seconds=int(os.getenv("MIN_AUDIO_DURATION_SECONDS", "5")),
         max_audio_duration_seconds=max_audio_duration_seconds,

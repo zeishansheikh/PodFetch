@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -133,12 +134,13 @@ class InstagramAudioDownloader:
 
         logger.info(f"Downloading audio: '{candidate.title}' by '{artist}' -> {audio_filename}")
 
-        # 4. Stream download with retries
+        # 4. Download audio with retries (supports direct HTTP stream or clean full-song extraction via yt-dlp)
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)",
             "Accept": "*/*",
         }
 
+        is_direct_http = audio_url.startswith("http://") or audio_url.startswith("https://")
         attempt = 0
         success = False
         last_error = ""
@@ -146,15 +148,56 @@ class InstagramAudioDownloader:
         while attempt < self.config.max_retries and not success:
             attempt += 1
             try:
-                with requests.get(audio_url, headers=headers, stream=True, timeout=30) as resp:
-                    resp.raise_for_status()
-                    with open(audio_path, "wb") as f:
-                        for chunk in resp.iter_content(chunk_size=64 * 1024):
-                            if chunk:
-                                f.write(chunk)
-                success = True
+                if is_direct_http:
+                    with requests.get(audio_url, headers=headers, stream=True, timeout=30) as resp:
+                        resp.raise_for_status()
+                        with open(audio_path, "wb") as f:
+                            for chunk in resp.iter_content(chunk_size=64 * 1024):
+                                if chunk:
+                                    f.write(chunk)
+                    success = True
+                else:
+                    # Clean full-song studio audio extraction for official trending song
+                    output_template = str(self.temp_dir / f"{audio_filename.rsplit('.', 1)[0]}.%(ext)s")
+                    cmd = [
+                        sys.executable, "-m", "yt_dlp",
+                        "--extract-audio",
+                        "--audio-format", "mp3",
+                        "--audio-quality", "0",
+                        "--no-playlist",
+                        "--match-filter", "duration <= 480 & duration >= 45",
+                        "-o", output_template,
+                        audio_url,
+                    ]
+                    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+                    if res.returncode == 0 and audio_path.exists():
+                        success = True
+                    else:
+                        raise RuntimeError(res.stderr or f"yt-dlp exited with code {res.returncode}")
             except Exception as e:
                 last_error = str(e)
+                # Fallback: if direct stream failed or was voiceover, try clean official song audio extraction
+                if is_direct_http and candidate.title and candidate.artist and candidate.artist != "Instagram Artist":
+                    try:
+                        clean_query = f"ytsearch1:{candidate.title} {candidate.artist} official audio"
+                        output_template = str(self.temp_dir / f"{audio_filename.rsplit('.', 1)[0]}.%(ext)s")
+                        cmd = [
+                            sys.executable, "-m", "yt_dlp",
+                            "--extract-audio",
+                            "--audio-format", "mp3",
+                            "--audio-quality", "0",
+                            "--no-playlist",
+                            "--match-filter", "duration <= 480 & duration >= 45",
+                            "-o", output_template,
+                            clean_query,
+                        ]
+                        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+                        if res.returncode == 0 and audio_path.exists():
+                            success = True
+                            break
+                    except Exception as fallback_err:
+                        last_error = f"{last_error}; fallback error: {fallback_err}"
+
                 logger.warning(
                     f"Download attempt {attempt}/{self.config.max_retries} failed for '{audio_filename}': {e}"
                 )
@@ -163,7 +206,7 @@ class InstagramAudioDownloader:
                         audio_path.unlink()
                     except OSError:
                         pass
-                if attempt < self.config.max_retries:
+                if attempt < self.config.max_retries and not success:
                     time.sleep(self.config.backoff_factor ** attempt)
 
         if not success or not audio_path.exists():
