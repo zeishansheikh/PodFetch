@@ -820,9 +820,12 @@ def direct_download(req: DirectDownloadRequest) -> Dict[str, Any]:
                     title=cand.title,
                     artist=cand.artist or "Instagram",
                     source_url=cand.canonical_url or "",
-                    file_path=str(audio_path),
+                    audio_file=audio_path.name,
+                    local_path=str(audio_path),
                     drive_file_id=drive_file_id,
-                    duration=cand.duration_seconds,
+                    drive_path=drive_path,
+                    duration_seconds=cand.duration_seconds,
+                    status="UPLOADED" if drive_file_id else "DOWNLOADED",
                 )
             except Exception as m_err:
                 logger.warning(f"Audio manifest update failed: {m_err}")

@@ -77,11 +77,14 @@ class AudioManifestManager:
         is_authorized: bool = True,
         audio_file: Optional[str] = None,
         local_path: Optional[str] = None,
+        file_path: Optional[str] = None,
+        duration: Optional[int] = None,
         drive_file_id: Optional[str] = None,
         drive_path: Optional[str] = None,
         metadata_drive_file_id: Optional[str] = None,
         status: str = "UPLOADED",
         uploaded_at: Optional[str] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """Add or update a track entry and atomically save the manifest."""
         manifest = self.load_manifest()
@@ -111,16 +114,20 @@ class AudioManifestManager:
         track_entry["title"] = title
         track_entry["artist"] = artist
         track_entry["source_url"] = source_url
-        if duration_seconds is not None:
-            track_entry["duration_seconds"] = duration_seconds
+        effective_duration = duration_seconds if duration_seconds is not None else duration
+        if effective_duration is not None:
+            track_entry["duration_seconds"] = effective_duration
         if popularity:
             track_entry["popularity"] = popularity
         track_entry["is_authorized"] = is_authorized
 
+        effective_local = local_path or file_path
         if audio_file:
             track_entry["audio_file"] = audio_file
-        if local_path:
-            track_entry["local_path"] = str(local_path)
+        elif effective_local:
+            track_entry["audio_file"] = Path(effective_local).name
+        if effective_local:
+            track_entry["local_path"] = str(effective_local)
         if drive_file_id:
             track_entry["drive_file_id"] = drive_file_id
         if drive_path:
