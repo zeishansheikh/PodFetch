@@ -1,7 +1,5 @@
 # Environment & Secrets
-.env
 .env.local
-*.env
 
 # Python bytecode and caches
 __pycache__/
