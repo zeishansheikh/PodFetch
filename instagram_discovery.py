@@ -6,6 +6,7 @@ and enforces strict limitation reporting when official API access is unavailable
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import re
 import urllib.parse
@@ -21,6 +22,24 @@ from filters import VideoCandidate, VideoFilter
 from logger import get_logger
 
 logger = get_logger("instagram_discovery")
+
+
+def normalize_meta_base_url(url: Optional[str]) -> str:
+    """Normalize Meta/Instagram Graph API endpoint base URL.
+
+    Ensures that values like 'https://facebook.com' or 'https://graph.facebook.com'
+    correctly resolve to the valid Meta Graph API endpoint 'https://graph.facebook.com/v21.0'.
+    """
+    if not url or not str(url).strip():
+        return "https://graph.facebook.com/v21.0"
+    cleaned = str(url).strip().rstrip("/")
+    if "graph.facebook.com" in cleaned:
+        if not re.search(r"/v\d+\.\d+$", cleaned):
+            return f"{cleaned}/v21.0"
+        return cleaned
+    if "facebook.com" in cleaned:
+        return "https://graph.facebook.com/v21.0"
+    return cleaned
 
 
 def sanitize_url_for_logging(url: str) -> str:
@@ -101,10 +120,11 @@ class InstagramAudioDiscoverer:
 
     def build_api_url(self) -> str:
         """Construct the official Meta Graph API trending audio endpoint URL."""
-        base = getattr(self.config, "instagram_api_base_url", "https://graph.facebook.com/v21.0").rstrip("/")
-        account_id = self.config.instagram_account_id
-        # Primary official endpoint: /{ig_account_id}/trending_audio
-        return f"{base}/{account_id}/trending_audio"
+        base = normalize_meta_base_url(getattr(self.config, "instagram_api_base_url", "https://graph.facebook.com/v21.0"))
+        if base.endswith("/ig_audio") or base.endswith("/trending_audio"):
+            return base
+        # Primary official Meta endpoint for trending audio tracks is /ig_audio
+        return f"{base}/ig_audio"
 
     def parse_audio_item(self, item: Dict[str, Any], index: int = 1) -> Optional[InstagramAudioMetadata]:
         """Parse raw API JSON entry into InstagramAudioMetadata."""
@@ -119,23 +139,36 @@ class InstagramAudioDiscoverer:
         artist = str(
             item.get("artist_name")
             or item.get("artist")
+            or item.get("display_artist")
+            or item.get("ig_username")
             or item.get("creator_name")
             or item.get("owner_username")
             or "Instagram Artist"
         ).strip()
 
         canonical_url = str(
-            item.get("permalink")
+            item.get("on_platform_audio_preview_link")
+            or item.get("permalink")
             or item.get("source_url")
             or item.get("url")
             or f"https://www.instagram.com/reels/audio/{audio_id}/"
         ).strip()
 
-        audio_url = item.get("audio_src") or item.get("audio_url") or item.get("download_url") or item.get("media_url")
+        audio_url = (
+            item.get("download_url")
+            or item.get("audio_src")
+            or item.get("audio_url")
+            or item.get("media_url")
+        )
         if audio_url:
             audio_url = str(audio_url).strip()
 
         duration = item.get("duration") or item.get("duration_seconds")
+        if duration is None and item.get("duration_in_ms") is not None:
+            try:
+                duration = int(item["duration_in_ms"]) // 1000
+            except Exception:
+                duration = None
         duration_seconds = int(duration) if duration is not None and str(duration).isdigit() else None
 
         reel_count = item.get("reel_count") or item.get("usage_count")
@@ -213,14 +246,25 @@ class InstagramAudioDiscoverer:
         safe_url = sanitize_url_for_logging(url)
         logger.info(f"Querying Instagram Graph API trending audio: {safe_url}")
 
-        params = {
-            "access_token": self.config.instagram_access_token,
-            "fields": (
-                "id,title,artist_name,audio_src,duration,reel_count,trend_rank,"
-                "is_authorized,authorized_for_reuse,license_type,permalink,created_time"
-            ),
-            "limit": limit,
-        }
+        is_ig_audio_endpoint = "/ig_audio" in url
+        audio_type = getattr(self.config, "instagram_audio_type", "original_sound") or "original_sound"
+
+        if is_ig_audio_endpoint:
+            params: Dict[str, Any] = {
+                "access_token": self.config.instagram_access_token,
+                "ig_user_id": self.config.instagram_account_id,
+                "audio_type": audio_type,
+                "limit": limit,
+            }
+        else:
+            params = {
+                "access_token": self.config.instagram_access_token,
+                "fields": (
+                    "id,title,artist_name,audio_src,duration,reel_count,trend_rank,"
+                    "is_authorized,authorized_for_reuse,license_type,permalink,created_time"
+                ),
+                "limit": limit,
+            }
 
         headers = {
             "User-Agent": "PodFetch/2.0 (Audio Automation; +https://github.com/zeishansheikh/PodFetch)",
@@ -234,18 +278,90 @@ class InstagramAudioDiscoverer:
 
         try:
             response = requests.get(url, params=params, headers=headers, timeout=20)
+
+            # Fallback for older/alternate endpoints if /ig_audio returns 404
+            if response.status_code == 404 and is_ig_audio_endpoint and self.config.instagram_account_id:
+                base = normalize_meta_base_url(
+                    getattr(self.config, "instagram_api_base_url", "https://graph.facebook.com/v21.0")
+                )
+                fallback_url = f"{base}/{self.config.instagram_account_id}/trending_audio"
+                fallback_params = {
+                    "access_token": self.config.instagram_access_token,
+                    "fields": (
+                        "id,title,artist_name,audio_src,duration,reel_count,trend_rank,"
+                        "is_authorized,authorized_for_reuse,license_type,permalink,created_time"
+                    ),
+                    "limit": limit,
+                }
+                try:
+                    alt_resp = requests.get(fallback_url, params=fallback_params, headers=headers, timeout=20)
+                    if alt_resp.status_code == 200:
+                        response = alt_resp
+                        url = fallback_url
+                except Exception:
+                    pass
+
             if response.status_code == 200:
                 data = response.json()
-                raw_items = data.get("data") or data.get("trending_audio") or []
+                raw_items = data.get("audio") or data.get("data") or data.get("trending_audio") or []
                 total_examined = len(raw_items)
                 logger.info(f"Retrieved {total_examined} trending audio item(s) from Instagram API.")
 
+                parsed_metas: List[InstagramAudioMetadata] = []
                 for idx, raw_item in enumerate(raw_items, start=1):
                     meta = self.parse_audio_item(raw_item, index=idx)
                     if not meta:
                         total_skipped += 1
                         continue
+                    parsed_metas.append(meta)
 
+                # Fetch details concurrently for items that require download_url
+                items_needing_detail = [
+                    m for m in parsed_metas
+                    if not m.audio_url and m.is_authorized and self.config.instagram_account_id
+                ]
+
+                if items_needing_detail:
+                    base_url = normalize_meta_base_url(
+                        getattr(self.config, "instagram_api_base_url", "https://graph.facebook.com/v21.0")
+                    )
+
+                    def _fetch_track_detail(m: InstagramAudioMetadata) -> None:
+                        try:
+                            detail_url = f"{base_url}/{m.audio_id}"
+                            detail_params = {
+                                "access_token": self.config.instagram_access_token,
+                                "user_id": self.config.instagram_account_id,
+                            }
+                            detail_resp = requests.get(detail_url, params=detail_params, headers=headers, timeout=10)
+                            if detail_resp.status_code == 200:
+                                detail_data = detail_resp.json()
+                                if isinstance(detail_data, dict):
+                                    dl = (
+                                        detail_data.get("download_url")
+                                        or detail_data.get("audio_src")
+                                        or detail_data.get("audio_url")
+                                    )
+                                    if dl:
+                                        m.audio_url = str(dl).strip()
+                                    if detail_data.get("title") and (not m.title or m.title == "Original Audio"):
+                                        m.title = str(detail_data["title"]).strip()
+                                    if detail_data.get("display_artist") and (
+                                        not m.artist or m.artist == "Instagram Artist"
+                                    ):
+                                        m.artist = str(detail_data["display_artist"]).strip()
+                                    elif detail_data.get("ig_username") and (
+                                        not m.artist or m.artist == "Instagram Artist"
+                                    ):
+                                        m.artist = str(detail_data["ig_username"]).strip()
+                        except Exception as e:
+                            logger.debug(f"Could not fetch detail for audio track {m.audio_id}: {e}")
+
+                    max_workers = min(len(items_needing_detail), getattr(self.config, "discovery_max_workers", 6) or 6)
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        list(executor.map(_fetch_track_detail, items_needing_detail))
+
+                for meta in parsed_metas:
                     cand = meta.to_candidate()
                     candidates.append(cand)
 

@@ -242,6 +242,9 @@ def _parse_sources(
     return final_sources
 
 
+DEFAULT_INSTAGRAM_ACCOUNT_ID: str = "17841435006386072"
+
+
 @dataclass
 class AppConfig:
     """Strongly typed application configuration."""
@@ -258,9 +261,10 @@ class AppConfig:
 
     # Instagram Specific
     instagram_access_token: Optional[str] = None
-    instagram_account_id: Optional[str] = None
+    instagram_account_id: Optional[str] = DEFAULT_INSTAGRAM_ACCOUNT_ID
     instagram_api_base_url: str = "https://graph.facebook.com/v21.0"
     instagram_audio_manifest_path: Path = field(default_factory=lambda: Path("audio_manifest.json"))
+    instagram_audio_type: str = "original_sound"
     min_audio_duration_seconds: int = 5
     max_audio_duration_seconds: Optional[int] = 90
 
@@ -435,9 +439,10 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
         max_video_duration_seconds=int(os.getenv("MAX_VIDEO_DURATION_SECONDS", "30")),
         min_video_resolution=min_video_resolution,
         instagram_access_token=os.getenv("INSTAGRAM_ACCESS_TOKEN"),
-        instagram_account_id=os.getenv("INSTAGRAM_ACCOUNT_ID"),
+        instagram_account_id=os.getenv("INSTAGRAM_ACCOUNT_ID") or DEFAULT_INSTAGRAM_ACCOUNT_ID,
         instagram_api_base_url=os.getenv("INSTAGRAM_API_BASE_URL", "https://graph.facebook.com/v21.0"),
         instagram_audio_manifest_path=Path(os.getenv("INSTAGRAM_AUDIO_MANIFEST_PATH", "audio_manifest.json")),
+        instagram_audio_type=os.getenv("INSTAGRAM_AUDIO_TYPE", "original_sound").strip(),
         min_audio_duration_seconds=int(os.getenv("MIN_AUDIO_DURATION_SECONDS", "5")),
         max_audio_duration_seconds=max_audio_duration_seconds,
         pinterest_keywords=pinterest_keywords,

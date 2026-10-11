@@ -16,7 +16,11 @@ from config import AppConfig
 from database import Database, VideoStatus
 from drive_uploader import GoogleDriveUploader
 from filters import VideoCandidate, VideoFilter
-from instagram_discovery import InstagramAudioDiscoverer, InstagramAudioMetadata
+from instagram_discovery import (
+    InstagramAudioDiscoverer,
+    InstagramAudioMetadata,
+    normalize_meta_base_url,
+)
 from instagram_downloader import InstagramAudioDownloader, InstagramDownloadError
 from main import execute_pipeline
 
@@ -469,3 +473,67 @@ def test_pipeline_with_instagram_trending_audio(test_config: AppConfig, test_db:
         assert manifest_track["artist"] == "Wave Music"
         assert manifest_track["drive_file_id"] == "drive_audio_789"
         assert manifest_track["metadata_drive_file_id"] == "drive_meta_789"
+
+
+def test_normalize_meta_base_url():
+    """Verify endpoint URL normalization for Meta Graph API."""
+    assert normalize_meta_base_url("https://facebook.com") == "https://graph.facebook.com/v21.0"
+    assert normalize_meta_base_url("https://facebook.com/") == "https://graph.facebook.com/v21.0"
+    assert normalize_meta_base_url("https://graph.facebook.com/v21.0") == "https://graph.facebook.com/v21.0"
+    assert normalize_meta_base_url("https://graph.facebook.com") == "https://graph.facebook.com/v21.0"
+    assert normalize_meta_base_url(None) == "https://graph.facebook.com/v21.0"
+    assert normalize_meta_base_url("") == "https://graph.facebook.com/v21.0"
+
+
+def test_instagram_discovery_ig_audio_endpoint_success(test_config: AppConfig, test_db: Database):
+    """Verify official Meta /ig_audio response parsing and track detail endpoint resolution."""
+    discoverer = InstagramAudioDiscoverer(test_config, test_db)
+
+    mock_list_payload = {
+        "audio": [
+            {
+                "audio_id": "28620968620889095",
+                "duration_in_ms": 17000,
+                "title": "Original audio",
+                "audio_type": "original_sound",
+                "on_platform_audio_preview_link": "https://www.instagram.com/reels/audio/28620968620889095/",
+                "ig_username": "_zuber.04",
+            }
+        ]
+    }
+
+    mock_detail_payload = {
+        "audio_id": "28620968620889095",
+        "duration_in_ms": 17000,
+        "title": "Original audio",
+        "download_url": "https://cdn.example.com/audio/28620968620889095.mp4",
+        "display_artist": "Zuber Official",
+    }
+
+    with patch("requests.get") as mock_get:
+        resp_list = MagicMock()
+        resp_list.status_code = 200
+        resp_list.json.return_value = mock_list_payload
+
+        resp_detail = MagicMock()
+        resp_detail.status_code = 200
+        resp_detail.json.return_value = mock_detail_payload
+
+        mock_get.side_effect = [resp_list, resp_detail]
+
+        candidates, examined, skipped, limitations = discoverer.discover_trending_audio(limit=5)
+
+        assert examined == 1
+        assert len(candidates) == 1
+        assert limitations == []
+
+        cand = candidates[0]
+        assert cand.platform == "instagram"
+        assert cand.source_id == "28620968620889095"
+        assert cand.title == "Original audio"
+        assert cand.artist in ("Zuber Official", "_zuber.04")
+        assert cand.audio_url == "https://cdn.example.com/audio/28620968620889095.mp4"
+        assert cand.duration_seconds == 17
+        assert cand.canonical_url == "https://www.instagram.com/reels/audio/28620968620889095/"
+        assert cand.is_authorized is True
+
