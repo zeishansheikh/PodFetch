@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-10-11T10:44:50.423821+00:00",
+  "total_tracks": 1,
+  "tracks": [
+    {
+      "audio_id": "28620968620889095",
+      "title": "Original audio",
+      "artist": "_zuber.04",
+      "source_url": "https://www.instagram.com/reels/audio/28620968620889095/",
+      "discovered_at": "2026-10-11T10:44:34.600940+00:00",
+      "created_at": "2026-10-11T10:44:50.423821+00:00",
+      "duration_seconds": 17,
+      "popularity": {
+        "reel_count": null,
+        "trend_rank": 1,
+        "popularity_score": 49000.0
+      },
+      "is_authorized": true,
+      "audio_file": "Instagram - zuber.04 - 28620968620889095.mp3",
+      "local_path": "temp/Instagram - zuber.04 - 28620968620889095.mp3",
+      "drive_file_id": "16P88ChYyRbfhleqJ2YccLEzrSRW8NNT9",
+      "drive_path": "14mOs_5rZlsr5Dtp40qXf9nmGEhTYvwLg/trending songs/2026-10-11/Instagram - zuber.04 - 28620968620889095.mp3",
+      "metadata_drive_file_id": "1hD2Q34KPDqlKUyDkhfDxCUHMZngxKw9R",
+      "status": "UPLOADED",
+      "uploaded_at": "2026-10-11T10:44:50.420112+00:00",
+      "last_updated": "2026-10-11T10:44:50.423821+00:00"
+    }
+  ]
+}

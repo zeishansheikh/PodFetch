@@ -282,6 +282,8 @@ class GoogleDriveUploader:
 
         if effective_platform:
             platform_folder_name = effective_platform.strip().lower()
+            if platform_folder_name == "instagram":
+                platform_folder_name = getattr(self.config, "instagram_drive_folder_name", "trending songs") or "trending songs"
             current_target_id, plat_name = self.get_or_create_subfolder(
                 current_target_id, platform_folder_name
             )
