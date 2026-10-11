@@ -84,14 +84,15 @@ export function InstagramAudio({ showToast, onNavigate }) {
   }, [audioType]);
 
   const handleSyncTrack = async (track) => {
-    const trackId = track.audio_asset_id || track.id;
+    const trackId = track.audio_asset_id || track.source_id || track.id;
+    const audioUrl = track.audio_url || track.preview_url || track.canonical_url;
     setSyncingTrackId(trackId);
     try {
       const res = await api.downloadInstagramAudio({
         audio_asset_id: trackId,
-        audio_url: track.audio_url || track.preview_url,
+        audio_url: audioUrl,
         title: track.title,
-        artist: track.artist_name,
+        artist: track.artist || track.artist_name || 'Instagram',
         upload_to_drive: true,
       });
 

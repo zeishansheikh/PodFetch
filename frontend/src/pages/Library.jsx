@@ -148,7 +148,7 @@ export function Library({ showToast }) {
             <option value="">All Sources</option>
             <option value="youtube">YouTube</option>
             <option value="pinterest">Pinterest</option>
-            <option value="instagram_audio">Instagram Audio</option>
+            <option value="instagram">Instagram Audio</option>
           </select>
 
           <select

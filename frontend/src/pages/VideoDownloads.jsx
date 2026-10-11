@@ -54,34 +54,33 @@ export function VideoDownloads({ showToast, onNavigate }) {
     setError(null);
     setSuccessMsg(null);
 
-    const url = videoUrl.trim();
-    if (!url) {
-      setError('Please provide a video URL to download.');
+    const inputVal = videoUrl.trim();
+    if (!inputVal) {
+      setError('Please provide a video URL or search keyword to download.');
       return;
     }
 
-    // Basic validation
-    if (platform === 'youtube' && !url.includes('youtube.com') && !url.includes('youtu.be')) {
-      setError('The provided URL does not appear to be a valid YouTube link.');
-      return;
-    }
-    if (platform === 'pinterest' && !url.includes('pinterest.com') && !url.includes('pin.it')) {
-      setError('The provided URL does not appear to be a valid Pinterest link.');
-      return;
+    // Auto-detect platform if URL is from the other source
+    let targetPlatform = platform;
+    const lowerInput = inputVal.toLowerCase();
+    if (lowerInput.includes('pinterest.com') || lowerInput.includes('pin.it')) {
+      targetPlatform = 'pinterest';
+    } else if (lowerInput.includes('youtube.com') || lowerInput.includes('youtu.be')) {
+      targetPlatform = 'youtube';
     }
 
     setSubmitting(true);
     try {
       const res = await api.downloadVideo({
-        url,
-        platform,
+        url: inputVal,
+        platform: targetPlatform,
         title: customTitle.trim() || undefined,
         upload_to_drive: uploadToDrive,
       });
 
       if (res.status === 'queued') {
-        setSuccessMsg(`Task queued successfully (Job ID: ${res.job_id}). View live progress in Processing Queue.`);
-        showToast('Download queued successfully!', 'success');
+        setSuccessMsg(`Task queued successfully (Job ID: ${res.job_id}). Downloading and syncing directly to Google Drive.`);
+        showToast('Download queued! Saving to Google Drive upon completion.', 'success');
         setVideoUrl('');
         setCustomTitle('');
         fetchHistory();
@@ -169,23 +168,23 @@ export function VideoDownloads({ showToast, onNavigate }) {
             </div>
           </div>
 
-          {/* URL Input */}
+          {/* URL or Search Keyword Input */}
           <div className="form-group">
-            <label className="form-label">Video URL</label>
+            <label className="form-label">Video Link or Search Keyword</label>
             <input
-              type="url"
+              type="text"
               className="form-input"
               placeholder={
                 platform === 'youtube'
-                  ? 'https://www.youtube.com/watch?v=... or https://youtube.com/shorts/...'
-                  : 'https://www.pinterest.com/pin/... or https://pin.it/...'
+                  ? 'Paste YouTube link (watch, shorts, youtu.be) or enter search keyword'
+                  : 'Paste Pinterest Pin link or enter search keyword (e.g. nature aesthetic)'
               }
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
               required
             />
             <div className="form-help">
-              Direct video URL from browser address bar or share link.
+              Paste any YouTube video link, Pinterest Pin link, or enter a search keyword to automatically download and save to Google Drive.
             </div>
           </div>
 

@@ -197,7 +197,7 @@ export function ProcessingQueue({ showToast }) {
               <option value="">All Platforms</option>
               <option value="youtube">YouTube</option>
               <option value="pinterest">Pinterest</option>
-              <option value="instagram_audio">Instagram Audio</option>
+              <option value="instagram">Instagram Audio</option>
             </select>
 
             {(statusFilter || platformFilter) && (

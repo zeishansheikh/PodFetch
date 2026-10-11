@@ -215,17 +215,17 @@ export function GoogleDrive({ showToast }) {
                       <div className="truncate" style={{ fontWeight: 500 }} title={upload.title || upload.filename}>
                         {upload.title || upload.filename || 'Uploaded File'}
                       </div>
-                      {upload.filename && (
+                      {(upload.filename || upload.drive_path) && (
                         <div style={{ fontSize: '11px', color: 'var(--text-subtle)', fontFamily: 'var(--font-mono)' }}>
-                          {upload.filename}
+                          {upload.filename || upload.drive_path.split('/').pop()}
                         </div>
                       )}
                     </td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
-                      {formatBytes(upload.file_size_bytes)}
+                      {upload.file_size_bytes ? formatBytes(upload.file_size_bytes) : (upload.duration ? `${Math.round(upload.duration / 60)}m` : '—')}
                     </td>
                     <td style={{ color: 'var(--text-muted)' }}>
-                      {formatDate(upload.created_at)}
+                      {formatDate(upload.uploaded_at || upload.created_at)}
                     </td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-subtle)' }}>
                       {upload.drive_file_id ? upload.drive_file_id.slice(0, 16) + '...' : '—'}

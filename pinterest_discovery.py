@@ -219,6 +219,11 @@ class PinterestDiscoverer:
         self.config = config
         self.db = db
 
+    def discover_pins_by_keyword(self, keyword: str, limit: int = 15) -> List[PinterestPinMetadata]:
+        """Discover pins matching a specific keyword, limited to requested count."""
+        pins = self.search_keyword(keyword)
+        return pins[:limit]
+
     def _query_official_api(self, keyword: str, limit: int = 25) -> List[PinterestPinMetadata]:
         """Query official Pinterest API v5 if access token is configured."""
         if not self.config.pinterest_access_token:

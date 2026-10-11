@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import threading
 import time
 import uuid
@@ -16,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yt_dlp
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -23,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from audio_manifest import AudioManifestManager
+from filename_utils import generate_source_filename, sanitize_filename
 from config import AppConfig, load_config
 from database import Database, VideoStatus
 from discovery import ChannelDiscoverer, select_multisource_candidates
@@ -90,6 +93,7 @@ class DirectDownloadRequest(BaseModel):
     duration_seconds: Optional[int] = None
     thumbnail_url: Optional[str] = None
     channel_name: Optional[str] = None
+    search_keyword: Optional[str] = None
 
 
 class VideoDownloadPayload(BaseModel):
@@ -114,7 +118,7 @@ class YouTubeDiscoverPayload(BaseModel):
 
 
 class PinterestDiscoverPayload(BaseModel):
-    keyword: str
+    keyword: Optional[str] = None
     max_videos: int = 15
 
 
@@ -208,8 +212,9 @@ def get_library_records(
         params: List[Any] = []
 
         if platform and platform.lower() != "all":
+            norm_plat = "instagram" if "instagram" in platform.lower() else platform.lower()
             query_conditions.append("platform = ?")
-            params.append(platform.lower())
+            params.append(norm_plat)
 
         if status and status.upper() != "ALL":
             query_conditions.append("status = ?")
@@ -326,14 +331,111 @@ def retry_failed_jobs(req: RetryFailedRequest) -> Dict[str, Any]:
 
 @app.get("/api/discover/youtube")
 def discover_youtube(
-    channel: Optional[str] = Query(None, description="YouTube channel URL, handle, or ID"),
+    channel: Optional[str] = Query(None, description="YouTube channel URL, handle, ID, video link, or search query"),
     limit: int = Query(10, ge=1, le=30),
 ) -> Dict[str, Any]:
-    """Discover recent videos from a configured or queried YouTube channel."""
+    """Discover videos from YouTube: supports channels, direct video links, and search queries."""
     config = get_config()
     db = get_db(config)
-    target_channel = channel or (config.youtube_channels[0] if config.youtube_channels else "@hubermanlab")
+    target_channel = (channel or "").strip() or (config.youtube_channels[0] if config.youtube_channels else "@hubermanlab")
 
+    # 1. Direct YouTube video URL check
+    is_direct_video = any(pat in target_channel for pat in ("/watch?v=", "youtu.be/", "/shorts/", "watch?v="))
+    if is_direct_video:
+        try:
+            ydl_opts = {"extract_flat": True, "quiet": True}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(target_channel, download=False)
+                vid_id = info.get("id") or "video"
+                title = info.get("title") or "YouTube Video"
+                uploader = info.get("uploader") or info.get("channel") or "YouTube"
+                dur = info.get("duration")
+                thumb = info.get("thumbnail") or f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg"
+                is_processed = db.is_video_processed(vid_id, platform="youtube")
+                items = [{
+                    "source_id": vid_id,
+                    "video_id": vid_id,
+                    "id": vid_id,
+                    "title": title,
+                    "channel_name": uploader,
+                    "channel_id": info.get("channel_id") or "youtube",
+                    "url": info.get("webpage_url") or f"https://www.youtube.com/watch?v={vid_id}",
+                    "canonical_url": info.get("webpage_url") or f"https://www.youtube.com/watch?v={vid_id}",
+                    "duration_seconds": dur,
+                    "duration": dur,
+                    "is_processed": is_processed,
+                    "platform": "youtube",
+                    "thumbnail_url": thumb,
+                }]
+                return {
+                    "source": "youtube",
+                    "channel": target_channel,
+                    "total_found": 1,
+                    "items": items,
+                }
+        except Exception as e:
+            logger.error(f"Direct YouTube probe failed: {e}", exc_info=True)
+            return {
+                "source": "youtube",
+                "channel": target_channel,
+                "total_found": 0,
+                "items": [],
+                "error": str(e),
+            }
+
+    # 2. General search query (not a channel handle, channel ID, or URL)
+    is_channel = (
+        target_channel.startswith("@")
+        or target_channel.startswith("UC")
+        or "youtube.com/c" in target_channel
+        or "youtube.com/user" in target_channel
+        or "youtube.com/channel" in target_channel
+        or "youtube.com/@" in target_channel
+    )
+
+    if not is_channel and not target_channel.startswith("http"):
+        try:
+            ydl_opts = {"extract_flat": True, "quiet": True}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                res = ydl.extract_info(f"ytsearch{limit}:{target_channel}", download=False)
+                entries = res.get("entries", [])
+                items = []
+                for entry in entries:
+                    vid_id = entry.get("id") or "video"
+                    dur = entry.get("duration")
+                    is_processed = db.is_video_processed(vid_id, platform="youtube")
+                    items.append({
+                        "source_id": vid_id,
+                        "video_id": vid_id,
+                        "id": vid_id,
+                        "title": entry.get("title") or f"YouTube Video {vid_id}",
+                        "channel_name": entry.get("uploader") or entry.get("channel") or "YouTube",
+                        "channel_id": entry.get("channel_id") or "youtube",
+                        "url": entry.get("webpage_url") or f"https://www.youtube.com/watch?v={vid_id}",
+                        "canonical_url": entry.get("webpage_url") or f"https://www.youtube.com/watch?v={vid_id}",
+                        "duration_seconds": dur,
+                        "duration": dur,
+                        "is_processed": is_processed,
+                        "platform": "youtube",
+                        "thumbnail_url": entry.get("thumbnail") or f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg",
+                    })
+                return {
+                    "source": "youtube",
+                    "channel": target_channel,
+                    "total_found": len(items),
+                    "items": items,
+                }
+        except Exception as e:
+            logger.error(f"YouTube search probe failed: {e}", exc_info=True)
+            return {
+                "source": "youtube",
+                "channel": target_channel,
+                "total_found": 0,
+                "items": [],
+                "error": str(e),
+            }
+
+    # 3. Channel probe
     discoverer = ChannelDiscoverer(config, db)
     try:
         candidates = discoverer.discover_channel_videos(target_channel, max_probe=limit)
@@ -342,11 +444,15 @@ def discover_youtube(
             is_processed = db.is_video_processed(c.source_id, platform="youtube")
             items.append({
                 "source_id": c.source_id,
+                "video_id": c.source_id,
+                "id": c.source_id,
                 "title": c.title,
                 "channel_name": c.channel_name,
                 "channel_id": c.channel_id,
                 "url": c.canonical_url,
+                "canonical_url": c.canonical_url,
                 "duration_seconds": c.duration_seconds,
+                "duration": c.duration_seconds,
                 "is_processed": is_processed,
                 "platform": "youtube",
                 "thumbnail_url": c.thumbnail_url or f"https://i.ytimg.com/vi/{c.source_id}/hqdefault.jpg",
@@ -370,35 +476,56 @@ def discover_youtube(
 
 @app.get("/api/discover/pinterest")
 def discover_pinterest(
-    keyword: Optional[str] = Query(None, description="Keyword to search on Pinterest"),
+    keyword: Optional[str] = Query(None, description="Keyword or Pin URL to search on Pinterest"),
     limit: int = Query(15, ge=1, le=30),
 ) -> Dict[str, Any]:
-    """Discover video Pins from Pinterest matching keyword."""
+    """Discover video Pins from Pinterest matching keyword or Pin URL."""
     config = get_config()
     db = get_db(config)
-    search_keyword = keyword or (config.pinterest_keywords[0] if config.pinterest_keywords else "nature aesthetics")
+    search_keyword = (keyword or "").strip() or (config.pinterest_keywords[0] if config.pinterest_keywords else "nature aesthetics")
 
     discoverer = PinterestDiscoverer(config, db)
     try:
-        pins = discoverer.discover_pins_by_keyword(search_keyword, limit=limit)
+        # Check direct Pin URL
+        pin_match = re.search(r"/pin/(\d+)", search_keyword)
+        if pin_match:
+            pin_id = pin_match.group(1)
+            pin_details = discoverer.fetch_pin_details(pin_id)
+            if pin_details:
+                pins = [pin_details]
+            else:
+                pins = [discoverer.search_keyword(pin_id)]
+        else:
+            pins = discoverer.search_keyword(search_keyword)
+
         items: List[Dict[str, Any]] = []
-        for p in pins:
-            is_processed = db.is_video_processed(p.pin_id, platform="pinterest")
-            items.append({
-                "source_id": p.pin_id,
-                "title": p.title or f"Pin {p.pin_id}",
-                "description": p.description,
-                "url": p.canonical_url,
-                "thumbnail_url": p.thumbnail_url,
-                "is_video": p.is_video,
-                "duration_seconds": p.duration_seconds,
-                "width": p.width,
-                "height": p.height,
-                "is_vertical": p.is_vertical,
-                "is_processed": is_processed,
-                "platform": "pinterest",
-                "keyword": search_keyword,
-            })
+        for p in pins[:limit]:
+            if isinstance(p, list):
+                sub_list = p
+            else:
+                sub_list = [p]
+            for pin in sub_list:
+                is_processed = db.is_video_processed(pin.pin_id, platform="pinterest")
+                items.append({
+                    "source_id": pin.pin_id,
+                    "pin_id": pin.pin_id,
+                    "id": pin.pin_id,
+                    "title": pin.title or f"Pin {pin.pin_id}",
+                    "description": pin.description,
+                    "url": pin.canonical_url,
+                    "canonical_url": pin.canonical_url,
+                    "thumbnail_url": pin.thumbnail_url,
+                    "is_video": pin.is_video,
+                    "duration_seconds": pin.duration_seconds,
+                    "duration": pin.duration_seconds,
+                    "width": pin.width,
+                    "height": pin.height,
+                    "is_vertical": pin.is_vertical,
+                    "is_processed": is_processed,
+                    "platform": "pinterest",
+                    "keyword": search_keyword,
+                })
+
         return {
             "source": "pinterest",
             "keyword": search_keyword,
@@ -450,12 +577,18 @@ def discover_instagram(
             is_rap, rap_reason = is_rap_track(c.title, c.artist)
             items.append({
                 "source_id": c.source_id,
+                "audio_asset_id": c.source_id,
+                "id": c.source_id,
                 "title": c.title,
                 "artist": c.artist,
+                "artist_name": c.artist,
                 "canonical_url": c.canonical_url,
+                "url": c.canonical_url,
                 "audio_url": c.audio_url,
+                "preview_url": c.audio_url,
                 "has_downloadable_stream": bool(c.audio_url),
                 "duration_seconds": c.duration_seconds,
+                "duration": c.duration_seconds,
                 "popularity_score": c.popularity_score,
                 "reel_count": c.reel_count,
                 "trend_rank": c.trend_rank,
@@ -593,7 +726,7 @@ def get_job_status(job_id: str) -> Dict[str, Any]:
 
 @app.post("/api/download/direct")
 def direct_download(req: DirectDownloadRequest) -> Dict[str, Any]:
-    """Download a single discovered video or audio track directly."""
+    """Download a single discovered video or audio track directly and upload to Google Drive."""
     config = get_config()
     db = get_db(config)
 
@@ -611,6 +744,7 @@ def direct_download(req: DirectDownloadRequest) -> Dict[str, Any]:
         artist=req.artist,
         audio_url=req.audio_url,
         thumbnail_url=req.thumbnail_url,
+        search_keyword=req.search_keyword,
     )
 
     db.upsert_video(
@@ -622,55 +756,185 @@ def direct_download(req: DirectDownloadRequest) -> Dict[str, Any]:
         channel_name=cand.channel_name,
         duration=cand.duration_seconds,
         status=VideoStatus.DISCOVERED,
+        search_keyword=cand.search_keyword,
     )
 
     try:
         if req.platform == "instagram":
             downloader = InstagramAudioDownloader(config)
             audio_path, meta_path = downloader.download_audio(cand)
+            downloaded_at = datetime.now(timezone.utc).isoformat()
             db.update_status(
                 source_id=cand.source_id,
                 platform="instagram",
                 status=VideoStatus.DOWNLOADED,
-                downloaded_at=datetime.now(timezone.utc).isoformat(),
+                downloaded_at=downloaded_at,
             )
+
+            # Automated Google Drive upload
+            drive_file_id = None
+            drive_path = None
+            if config.google_drive_folder_id:
+                try:
+                    drive_uploader = GoogleDriveUploader(config)
+                    clean_filename = generate_source_filename(
+                        platform="instagram",
+                        keyword_or_channel=cand.artist or cand.channel_name or "audio",
+                        source_id=cand.source_id,
+                        extension="mp3",
+                    )
+                    drive_file_id, drive_path = drive_uploader.upload_file(
+                        file_path=audio_path,
+                        custom_filename=clean_filename,
+                        platform="instagram",
+                        mimetype="audio/mpeg",
+                        description=f"Instagram Trending Audio: {cand.title} by {cand.artist}",
+                    )
+                    if meta_path and meta_path.exists():
+                        drive_uploader.upload_file(
+                            file_path=meta_path,
+                            custom_filename=meta_path.name,
+                            platform="instagram",
+                            mimetype="application/json",
+                            description=f"Instagram Trending Audio Metadata: {cand.title}",
+                        )
+                except Exception as upload_err:
+                    logger.error(f"Google Drive upload failed for Instagram audio {cand.title}: {upload_err}", exc_info=True)
+
+            if drive_file_id:
+                uploaded_at = datetime.now(timezone.utc).isoformat()
+                db.update_status(
+                    source_id=cand.source_id,
+                    platform="instagram",
+                    status=VideoStatus.UPLOADED,
+                    drive_file_id=drive_file_id,
+                    drive_path=drive_path,
+                    uploaded_at=uploaded_at,
+                )
+
+            # Update audio manifest
+            try:
+                manifest_manager = AudioManifestManager(config.instagram_audio_manifest_path)
+                manifest_manager.add_or_update_track(
+                    audio_id=cand.source_id,
+                    title=cand.title,
+                    artist=cand.artist or "Instagram",
+                    source_url=cand.canonical_url or "",
+                    file_path=str(audio_path),
+                    drive_file_id=drive_file_id,
+                    duration=cand.duration_seconds,
+                )
+            except Exception as m_err:
+                logger.warning(f"Audio manifest update failed: {m_err}")
+
             return {
                 "success": True,
-                "message": f"Successfully downloaded audio track '{req.title}'",
+                "status": "UPLOADED" if drive_file_id else "DOWNLOADED",
+                "message": f"Successfully processed '{req.title}'" + (f" and uploaded to Google Drive ({drive_file_id})" if drive_file_id else ""),
                 "filename": audio_path.name,
                 "file_size": audio_path.stat().st_size if audio_path.exists() else 0,
+                "drive_file_id": drive_file_id,
+                "drive_path": drive_path,
             }
 
         elif req.platform == "pinterest":
             p_downloader = PinterestDownloader(config)
             vid_path = p_downloader.download_video(cand)
+            downloaded_at = datetime.now(timezone.utc).isoformat()
             db.update_status(
                 source_id=cand.source_id,
                 platform="pinterest",
                 status=VideoStatus.DOWNLOADED,
-                downloaded_at=datetime.now(timezone.utc).isoformat(),
+                downloaded_at=downloaded_at,
             )
+
+            # Automated Google Drive upload
+            drive_file_id = None
+            drive_path = None
+            if config.google_drive_folder_id:
+                try:
+                    drive_uploader = GoogleDriveUploader(config)
+                    clean_filename = generate_source_filename(
+                        platform="pinterest",
+                        keyword_or_channel=cand.search_keyword or cand.channel_name or "pinterest",
+                        source_id=cand.source_id,
+                        extension="mp4",
+                    )
+                    drive_file_id, drive_path = drive_uploader.upload_video(
+                        vid_path, custom_filename=clean_filename, platform="pinterest"
+                    )
+                except Exception as upload_err:
+                    logger.error(f"Google Drive upload failed for Pinterest video {cand.title}: {upload_err}", exc_info=True)
+
+            if drive_file_id:
+                uploaded_at = datetime.now(timezone.utc).isoformat()
+                db.update_status(
+                    source_id=cand.source_id,
+                    platform="pinterest",
+                    status=VideoStatus.UPLOADED,
+                    drive_file_id=drive_file_id,
+                    drive_path=drive_path,
+                    uploaded_at=uploaded_at,
+                )
+
             return {
                 "success": True,
-                "message": f"Successfully downloaded Pinterest video '{req.title}'",
+                "status": "UPLOADED" if drive_file_id else "DOWNLOADED",
+                "message": f"Successfully processed Pinterest video '{req.title}'" + (f" and uploaded to Google Drive ({drive_file_id})" if drive_file_id else ""),
                 "filename": vid_path.name,
                 "file_size": vid_path.stat().st_size if vid_path.exists() else 0,
+                "drive_file_id": drive_file_id,
+                "drive_path": drive_path,
             }
 
         elif req.platform == "youtube":
             y_downloader = VideoDownloader(config)
             vid_path = y_downloader.download_video(cand)
+            downloaded_at = datetime.now(timezone.utc).isoformat()
             db.update_status(
                 source_id=cand.source_id,
                 platform="youtube",
                 status=VideoStatus.DOWNLOADED,
-                downloaded_at=datetime.now(timezone.utc).isoformat(),
+                downloaded_at=downloaded_at,
             )
+
+            # Automated Google Drive upload
+            drive_file_id = None
+            drive_path = None
+            if config.google_drive_folder_id:
+                try:
+                    drive_uploader = GoogleDriveUploader(config)
+                    clean_filename = generate_source_filename(
+                        platform="youtube",
+                        keyword_or_channel=cand.channel_name or "youtube",
+                        source_id=cand.source_id,
+                        extension="mp4",
+                    )
+                    drive_file_id, drive_path = drive_uploader.upload_video(
+                        vid_path, custom_filename=clean_filename, platform="youtube"
+                    )
+                except Exception as upload_err:
+                    logger.error(f"Google Drive upload failed for YouTube video {cand.title}: {upload_err}", exc_info=True)
+
+            if drive_file_id:
+                uploaded_at = datetime.now(timezone.utc).isoformat()
+                db.update_status(
+                    source_id=cand.source_id,
+                    platform="youtube",
+                    status=VideoStatus.UPLOADED,
+                    drive_file_id=drive_file_id,
+                    drive_path=drive_path,
+                    uploaded_at=uploaded_at,
+                )
+
             return {
                 "success": True,
-                "message": f"Successfully downloaded YouTube video '{req.title}'",
+                "status": "UPLOADED" if drive_file_id else "DOWNLOADED",
+                "message": f"Successfully processed YouTube video '{req.title}'" + (f" and uploaded to Google Drive ({drive_file_id})" if drive_file_id else ""),
                 "filename": vid_path.name,
                 "file_size": vid_path.stat().st_size if vid_path.exists() else 0,
+                "drive_file_id": drive_file_id,
+                "drive_path": drive_path,
             }
 
         else:
@@ -721,7 +985,7 @@ def get_drive_status() -> Dict[str, Any]:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, platform, source_id, title, drive_file_id, drive_path, uploaded_at
+            SELECT id, platform, source_id, title, drive_file_id, drive_path, uploaded_at, duration, canonical_url
             FROM videos
             WHERE status = 'UPLOADED'
             ORDER BY uploaded_at DESC
@@ -771,23 +1035,203 @@ def get_instagram_status() -> Dict[str, Any]:
 
 
 
+def _resolve_video_target(
+    url_or_keyword: str,
+    platform_hint: str = "youtube",
+    config: Optional[AppConfig] = None,
+    db: Optional[Database] = None,
+) -> DirectDownloadRequest:
+    """Resolve an arbitrary URL or search keyword into a valid DirectDownloadRequest for YouTube or Pinterest."""
+    cfg = config or get_config()
+    database = db or get_db(cfg)
+    target_str = url_or_keyword.strip()
+    low = target_str.lower()
+
+    # Normalize scheme if domain appears without http(s)://
+    if not target_str.startswith("http://") and not target_str.startswith("https://"):
+        if any(d in low for d in ("youtube.com", "youtu.be", "pinterest.com", "pin.it")) or target_str.startswith("www."):
+            target_str = f"https://{target_str}"
+            low = target_str.lower()
+
+    # Determine platform
+    if "pinterest.com" in low or "pin.it" in low:
+        effective_platform = "pinterest"
+    elif "youtube.com" in low or "youtu.be" in low:
+        effective_platform = "youtube"
+    else:
+        effective_platform = platform_hint.lower() if platform_hint else "youtube"
+
+    if effective_platform == "pinterest":
+        # Resolve shortlinks (pin.it)
+        if "pin.it" in low:
+            try:
+                import urllib.request
+                req_head = urllib.request.Request(
+                    target_str,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                )
+                with urllib.request.urlopen(req_head, timeout=10) as r:
+                    resolved_url = r.geturl()
+                    if "/pin/" in resolved_url:
+                        target_str = resolved_url
+                        low = target_str.lower()
+            except Exception as e:
+                logger.debug(f"pin.it redirect resolution notice: {e}")
+
+        # Check if direct Pin URL or Pin ID
+        pin_match = re.search(r"/pin/(\d+)", target_str)
+        if pin_match or (target_str.isdigit() and len(target_str) >= 10):
+            pin_id = pin_match.group(1) if pin_match else target_str
+            p_disc = PinterestDiscoverer(cfg, database)
+            title = f"Pinterest Pin {pin_id}"
+            thumb = None
+            dur = None
+            try:
+                details = p_disc.fetch_pin_details(pin_id)
+                if details:
+                    if details.title:
+                        title = details.title
+                    thumb = details.thumbnail_url
+                    dur = details.duration_seconds
+            except Exception:
+                pass
+
+            return DirectDownloadRequest(
+                platform="pinterest",
+                source_id=pin_id,
+                title=title,
+                canonical_url=f"https://www.pinterest.com/pin/{pin_id}/",
+                channel_name="Pinterest",
+                duration_seconds=dur,
+                thumbnail_url=thumb,
+                search_keyword="pinterest",
+            )
+        else:
+            # It's a Pinterest keyword search term! (e.g. "nature", "aesthetics", "motivation")
+            p_disc = PinterestDiscoverer(cfg, database)
+            pins = p_disc.search_keyword(target_str)
+            video_pins = [p for p in pins if p.is_video]
+            chosen = video_pins[0] if video_pins else (pins[0] if pins else None)
+            if not chosen:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No video Pins found on Pinterest for '{target_str}'. Try searching another keyword like 'nature aesthetic'."
+                )
+            return DirectDownloadRequest(
+                platform="pinterest",
+                source_id=chosen.pin_id,
+                title=chosen.title or f"Pinterest {target_str} Video",
+                canonical_url=chosen.canonical_url,
+                channel_name="Pinterest",
+                duration_seconds=chosen.duration_seconds,
+                thumbnail_url=chosen.thumbnail_url,
+                search_keyword=target_str,
+            )
+
+    # Otherwise YouTube:
+    ydl_opts = {"extract_flat": True, "quiet": True}
+    if target_str.startswith("http://") or target_str.startswith("https://"):
+        # Direct video URL
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = ydl.extract_info(target_str, download=False)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Failed to probe YouTube URL: {e}")
+            vid_id = info.get("id") or "video"
+            title = info.get("title") or f"YouTube Video {vid_id}"
+            uploader = info.get("uploader") or info.get("channel") or "YouTube"
+            canonical_url = info.get("webpage_url") or f"https://www.youtube.com/watch?v={vid_id}"
+            duration = info.get("duration")
+            return DirectDownloadRequest(
+                platform="youtube",
+                source_id=vid_id,
+                title=title,
+                canonical_url=canonical_url,
+                channel_name=uploader,
+                duration_seconds=duration,
+                thumbnail_url=info.get("thumbnail"),
+                search_keyword=uploader,
+            )
+    else:
+        # Search keyword on YouTube (e.g. "relaxing nature sound", "huberman podcast")
+        query = f"ytsearch1:{target_str}"
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                res = ydl.extract_info(query, download=False)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Failed to search YouTube: {e}")
+            entries = res.get("entries", [])
+            if not entries:
+                raise HTTPException(status_code=404, detail=f"No YouTube videos found matching '{target_str}'.")
+            entry = entries[0]
+            vid_id = entry.get("id") or "video"
+            title = entry.get("title") or f"YouTube Video {vid_id}"
+            uploader = entry.get("uploader") or entry.get("channel") or "YouTube"
+            canonical_url = entry.get("webpage_url") or f"https://www.youtube.com/watch?v={vid_id}"
+            duration = entry.get("duration")
+            return DirectDownloadRequest(
+                platform="youtube",
+                source_id=vid_id,
+                title=title,
+                canonical_url=canonical_url,
+                channel_name=uploader,
+                duration_seconds=duration,
+                thumbnail_url=entry.get("thumbnail"),
+                search_keyword=target_str,
+            )
+
+
 @app.post("/api/download/video")
 def download_video_endpoint(payload: VideoDownloadPayload) -> Dict[str, Any]:
-    """Download YouTube or Pinterest video payload."""
+    """Download YouTube or Pinterest video payload with automated Google Drive upload."""
     config = get_config()
+    db = get_db(config)
     job_id = f"vid-{uuid.uuid4().hex[:8]}"
+
+    # Initial target detection
+    platform_hint = payload.platform or "youtube"
+    low = payload.url.lower()
+    if "pinterest.com" in low or "pin.it" in low:
+        platform_hint = "pinterest"
+    elif "youtube.com" in low or "youtu.be" in low:
+        platform_hint = "youtube"
+
+    _active_jobs[job_id] = {
+        "job_id": job_id,
+        "platform": platform_hint,
+        "title": payload.title or payload.url,
+        "url": payload.url,
+        "status": "RUNNING",
+        "progress": "Starting video download & Google Drive upload...",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+        "error": None,
+        "drive_file_id": None,
+    }
 
     def _worker():
         try:
-            req = DirectDownloadRequest(
-                platform=payload.platform,
-                source_id=f"direct-{int(time.time())}",
-                title=payload.title or f"{payload.platform.capitalize()} Download",
-                canonical_url=payload.url,
-            )
-            direct_download(req)
+            req = _resolve_video_target(payload.url, platform_hint=platform_hint, config=config, db=db)
+            if payload.title:
+                req.title = payload.title
+            _active_jobs[job_id]["title"] = req.title
+            _active_jobs[job_id]["platform"] = req.platform
+            _active_jobs[job_id]["url"] = req.canonical_url
+            _active_jobs[job_id]["progress"] = f"Downloading {req.platform} media..."
+
+            result = direct_download(req)
+            _active_jobs[job_id]["status"] = "COMPLETED"
+            _active_jobs[job_id]["progress"] = "Completed and uploaded to Google Drive"
+            _active_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            _active_jobs[job_id]["drive_file_id"] = result.get("drive_file_id")
+            _active_jobs[job_id]["filename"] = result.get("filename")
+            _active_jobs[job_id]["drive_path"] = result.get("drive_path")
         except Exception as e:
-            logger.error(f"Download video failed: {e}", exc_info=True)
+            logger.error(f"Download video failed for job {job_id}: {e}", exc_info=True)
+            _active_jobs[job_id]["status"] = "FAILED"
+            _active_jobs[job_id]["error"] = str(e)
+            _active_jobs[job_id]["progress"] = f"Failed: {e}"
+            _active_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     thread = threading.Thread(target=_worker, daemon=True)
     thread.start()
@@ -795,15 +1239,28 @@ def download_video_endpoint(payload: VideoDownloadPayload) -> Dict[str, Any]:
     return {
         "status": "queued",
         "job_id": job_id,
-        "message": f"Download initiated for {payload.platform} video.",
+        "message": f"Download initiated for {platform_hint} video.",
     }
 
 
 @app.post("/api/download/instagram-audio")
 def download_instagram_audio_endpoint(payload: InstagramAudioPayload) -> Dict[str, Any]:
-    """Download Instagram trending audio payload."""
+    """Download Instagram trending audio payload with automated Google Drive upload."""
     config = get_config()
     job_id = f"audio-{uuid.uuid4().hex[:8]}"
+
+    _active_jobs[job_id] = {
+        "job_id": job_id,
+        "platform": "instagram",
+        "title": payload.title,
+        "url": payload.audio_url or f"https://www.instagram.com/reels/audio/{payload.audio_asset_id}",
+        "status": "RUNNING",
+        "progress": "Downloading audio & synchronizing to Drive...",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+        "error": None,
+        "drive_file_id": None,
+    }
 
     def _worker():
         try:
@@ -815,9 +1272,19 @@ def download_instagram_audio_endpoint(payload: InstagramAudioPayload) -> Dict[st
                 audio_url=payload.audio_url,
                 artist=payload.artist,
             )
-            direct_download(req)
+            result = direct_download(req)
+            _active_jobs[job_id]["status"] = "COMPLETED"
+            _active_jobs[job_id]["progress"] = "Completed and uploaded to Google Drive"
+            _active_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            _active_jobs[job_id]["drive_file_id"] = result.get("drive_file_id")
+            _active_jobs[job_id]["filename"] = result.get("filename")
+            _active_jobs[job_id]["drive_path"] = result.get("drive_path")
         except Exception as e:
-            logger.error(f"Download audio failed: {e}", exc_info=True)
+            logger.error(f"Download audio failed for job {job_id}: {e}", exc_info=True)
+            _active_jobs[job_id]["status"] = "FAILED"
+            _active_jobs[job_id]["error"] = str(e)
+            _active_jobs[job_id]["progress"] = f"Failed: {e}"
+            _active_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     thread = threading.Thread(target=_worker, daemon=True)
     thread.start()

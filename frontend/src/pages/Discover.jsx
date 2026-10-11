@@ -125,17 +125,19 @@ export function Discover({ showToast, onNavigate }) {
   };
 
   const handleDownloadVideo = async (item) => {
-    setProcessingId(item.video_id || item.url);
+    const targetUrl = item.url || item.canonical_url;
+    const targetId = item.video_id || item.source_id || item.pin_id || item.id || targetUrl;
+    setProcessingId(targetId);
     try {
       const res = await api.downloadVideo({
-        url: item.url,
+        url: targetUrl,
         platform: item.platform || activeTab,
         title: item.title,
         upload_to_drive: true,
       });
 
       if (res.status === 'queued') {
-        showToast(`Download task queued: ${item.title || 'Video'}`, 'success');
+        showToast(`Download task queued: ${item.title || 'Video'}. Saving to Drive upon completion.`, 'success');
       } else {
         showToast(res.message || 'Download started', 'info');
       }
@@ -147,18 +149,20 @@ export function Discover({ showToast, onNavigate }) {
   };
 
   const handleDownloadAudio = async (track) => {
-    setProcessingId(track.audio_asset_id || track.id);
+    const trackId = track.audio_asset_id || track.source_id || track.id;
+    const audioUrl = track.audio_url || track.preview_url || track.canonical_url || track.url;
+    setProcessingId(trackId);
     try {
       const res = await api.downloadInstagramAudio({
-        audio_asset_id: track.audio_asset_id || track.id,
-        audio_url: track.audio_url || track.preview_url,
+        audio_asset_id: trackId,
+        audio_url: audioUrl,
         title: track.title,
-        artist: track.artist_name,
+        artist: track.artist || track.artist_name || 'Instagram',
         upload_to_drive: true,
       });
 
       if (res.status === 'queued') {
-        showToast(`Audio sync queued: ${track.title}`, 'success');
+        showToast(`Audio sync queued: "${track.title}". Will upload to Drive "trending songs"`, 'success');
       } else {
         showToast(res.message || 'Audio task started', 'info');
       }
@@ -235,18 +239,18 @@ export function Discover({ showToast, onNavigate }) {
           {activeTab === 'youtube' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: '16px' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Channel URL or Handle</label>
+                <label className="form-label">Channel URL, Video Link, or Search Term</label>
                 <div className="input-with-icon">
                   <YoutubeIcon className="input-icon" />
                   <input
                     type="text"
                     className="form-input"
-                    placeholder="https://www.youtube.com/@TED or channel name"
+                    placeholder="e.g. @hubermanlab, YouTube link, or search keyword"
                     value={youtubeChannel}
                     onChange={(e) => setYoutubeChannel(e.target.value)}
                   />
                 </div>
-                <div className="form-help">Uses yt-dlp to inspect channel feed without downloading immediately.</div>
+                <div className="form-help">Supports channel feeds (@handle), direct video links, or search keywords.</div>
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
@@ -266,18 +270,18 @@ export function Discover({ showToast, onNavigate }) {
           {activeTab === 'pinterest' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: '16px' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Search Keyword / Topic</label>
+                <label className="form-label">Search Keyword or Pin URL</label>
                 <div className="input-with-icon">
                   <PinterestIcon className="input-icon" />
                   <input
                     type="text"
                     className="form-input"
-                    placeholder="e.g. podcast clips, nature cinematography, aesthetics"
+                    placeholder="e.g. nature aesthetic, cars, quotes, or Pin URL"
                     value={pinterestKeyword}
                     onChange={(e) => setPinterestKeyword(e.target.value)}
                   />
                 </div>
-                <div className="form-help">Scrapes Pinterest public video search results into database records.</div>
+                <div className="form-help">Finds Pinterest video Pins by keyword or direct Pin URL.</div>
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
@@ -407,14 +411,15 @@ export function Discover({ showToast, onNavigate }) {
         <div className="media-grid">
           {results.map((item, idx) => {
             const isAudio = activeTab === 'instagram' || item.audio_asset_id;
-            const itemId = item.video_id || item.audio_asset_id || item.id || idx;
+            const itemId = item.video_id || item.source_id || item.pin_id || item.audio_asset_id || item.id || idx;
             const isProcessing = processingId === itemId;
+            const thumbUrl = item.thumbnail || item.thumbnail_url;
 
             return (
               <div key={itemId} className="media-card">
                 <div className="media-thumb-wrap">
-                  {item.thumbnail ? (
-                    <img src={item.thumbnail} alt={item.title} className="media-thumb" loading="lazy" />
+                  {thumbUrl ? (
+                    <img src={thumbUrl} alt={item.title} className="media-thumb" loading="lazy" />
                   ) : (
                     <div className="media-thumb-placeholder">
                       {isAudio ? <InstagramIcon size={36} /> : <YoutubeIcon size={36} />}
@@ -458,24 +463,24 @@ export function Discover({ showToast, onNavigate }) {
                     {item.title || 'Untitled Track / Video'}
                   </div>
 
-                  {item.channel_title || item.artist_name || item.creator ? (
+                  {item.channel_name || item.channel_title || item.artist || item.artist_name || item.creator ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: 'var(--text-subtle)' }}>
                       <User size={13} />
-                      <span className="truncate">{item.channel_title || item.artist_name || item.creator}</span>
+                      <span className="truncate">{item.channel_name || item.channel_title || item.artist || item.artist_name || item.creator}</span>
                     </div>
                   ) : null}
 
-                  {item.duration ? (
+                  {item.duration || item.duration_seconds ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: 'var(--text-subtle)' }}>
                       <Clock size={13} />
-                      <span>{Math.round(item.duration)}s</span>
+                      <span>{Math.round(item.duration || item.duration_seconds)}s</span>
                     </div>
                   ) : null}
 
                   <div className="media-card-meta">
-                    {item.url ? (
+                    {item.url || item.canonical_url ? (
                       <a
-                        href={item.url}
+                        href={item.url || item.canonical_url}
                         target="_blank"
                         rel="noopener noreferrer"
                         style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11.5px', color: 'var(--accent-primary)', textDecoration: 'none' }}

@@ -153,16 +153,16 @@ class PinterestDownloader:
                 "best[height<=854]/best"
             )
         else:
-            # 1080p Full HD: Require streams meeting 1080p, prioritizing fast direct HTTP/HTTPS
+            # 1080p Full HD: Prioritize 1080p streams, with fallback to best quality available
             return (
                 "bestvideo[protocol^=http][width>=1080][height>=1080]+bestaudio[ext=m4a]/"
                 "best[protocol^=http][width>=1080][height>=1080]/"
                 "bestvideo[width>=1080][height>=1080]+bestaudio[ext=m4a]/"
                 "best[width>=1080][height>=1080]/"
-                "bestvideo[protocol^=http][width>=1080]+bestaudio[ext=m4a]/"
-                "best[protocol^=http][width>=1080]/"
                 "bestvideo[width>=1080]+bestaudio[ext=m4a]/"
-                "best[width>=1080]"
+                "best[width>=1080]/"
+                "bestvideo+bestaudio/"
+                "best"
             )
 
     def download_video(self, candidate: VideoCandidate) -> Path:
@@ -259,22 +259,17 @@ class PinterestDownloader:
                     self.cleanup_file(final_file_path)
                     raise PinterestDownloadError(f"Downloaded file failed validation: {reason}")
 
-                # Enforce 1080p resolution verification via FFprobe
+                # Enforce HD resolution verification via FFprobe
                 if self.config.min_video_resolution >= 1080 and meta.get("width") and meta.get("height"):
                     w = meta["width"]
                     h = meta["height"]
-                    is_vert = h >= w
-                    if is_vert and (w < 1080 and h < 1920):
+                    max_dim = max(w, h)
+                    min_dim = min(w, h)
+                    if max_dim < 1080 and min_dim < 720:
                         self.cleanup_file(final_file_path)
                         raise PinterestDownloadError(
-                            f"Downloaded video resolution {w}x{h} does not meet required 1080p Full HD "
-                            f"(expected minimum 1080x1920 vertical, got {w}x{h})"
-                        )
-                    elif not is_vert and (h < 1080 and w < 1920):
-                        self.cleanup_file(final_file_path)
-                        raise PinterestDownloadError(
-                            f"Downloaded video resolution {w}x{h} does not meet required 1080p Full HD "
-                            f"(expected minimum 1920x1080 horizontal, got {w}x{h})"
+                            f"Downloaded video resolution {w}x{h} does not meet required HD quality "
+                            f"(expected minimum 720p/1080p, got {w}x{h})"
                         )
 
                 file_size = final_file_path.stat().st_size
