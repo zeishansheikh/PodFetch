@@ -18,7 +18,7 @@ from discovery import ChannelDiscoverer, select_multisource_candidates, select_v
 from downloader import DownloadError, VideoDownloader
 from drive_uploader import GoogleDriveAuthError, GoogleDriveUploadError, GoogleDriveUploader
 from filename_utils import generate_source_filename, generate_video_filename
-from filters import VideoCandidate, VideoFilter
+from filters import VideoCandidate, VideoFilter, is_sad_song
 from logger import get_logger, log_podfetch_summary, setup_logger
 from pinterest_discovery import PinterestDiscoverer
 from pinterest_downloader import PinterestDownloader, PinterestDownloadError
@@ -220,13 +220,15 @@ def execute_pipeline(
         historical_counts=historical_counts,
         exact_limit=cli_limit,
         prefer_vertical=config.prefer_vertical,
+        prioritize_sad_audio=config.instagram_prioritize_sad,
     )
 
     logger.info(f"Selected {len(selected_candidates)} item(s) for this run.")
     for idx, cand in enumerate(selected_candidates, start=1):
         dur_str = f"{cand.duration_seconds}s" if cand.duration_seconds else "Unknown dur"
+        mood_str = " [SAD/EMOTIONAL]" if (cand.platform == "instagram" and is_sad_song(cand.title, cand.artist)) else ""
         logger.info(
-            f"  [{idx}] [{cand.platform.upper()}] '{cand.title}' "
+            f"  [{idx}] [{cand.platform.upper()}]{mood_str} '{cand.title}' "
             f"({dur_str}) - {cand.canonical_url}"
         )
 

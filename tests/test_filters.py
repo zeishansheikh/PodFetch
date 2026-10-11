@@ -154,3 +154,81 @@ def test_accept_1080p_pinterest_video(test_setup):
     assert is_valid
     assert reason is None
 
+
+def test_reject_rap_song_talha_anjum(test_setup):
+    """Verify that rap songs by Talha Anjum, Young Stunners or drill artists are rejected."""
+    _, config, v_filter = test_setup
+    config.instagram_allow_rap = False
+
+    rap_cand = VideoCandidate(
+        youtube_video_id="rap1",
+        channel_id="talha_anjum",
+        channel_name="Talha Anjum",
+        title="Told My Brother",
+        youtube_url="https://instagram.com/reels/audio/rap1",
+        platform="instagram",
+        source_id="rap1",
+        artist="Talha Anjum, Umair",
+        audio_url="https://cdn.example.com/audio.mp3",
+        duration_seconds=216,
+    )
+    is_valid, reason = v_filter.evaluate_candidate(rap_cand)
+    assert is_valid is False
+    assert "rap/hip-hop" in reason
+
+
+def test_reject_rap_song_by_title_keyword(test_setup):
+    """Verify that tracks with rap/diss keywords in title are rejected."""
+    _, config, v_filter = test_setup
+    config.instagram_allow_rap = False
+
+    drill_cand = VideoCandidate(
+        youtube_video_id="drill1",
+        channel_id="artist1",
+        channel_name="Artist",
+        title="Karachi Drill Rap Diss Track",
+        youtube_url="https://instagram.com/reels/audio/drill1",
+        platform="instagram",
+        source_id="drill1",
+        artist="Underground Artist",
+        audio_url="https://cdn.example.com/audio.mp3",
+        duration_seconds=180,
+    )
+    is_valid, reason = v_filter.evaluate_candidate(drill_cand)
+    assert is_valid is False
+    assert "rap/hip-hop" in reason
+
+
+def test_accept_soft_normal_song(test_setup):
+    """Verify that soft normal songs are accepted."""
+    _, config, v_filter = test_setup
+    config.instagram_allow_rap = False
+
+    soft_cand = VideoCandidate(
+        youtube_video_id="soft1",
+        channel_id="shanzy",
+        channel_name="Shanzy Sial",
+        title="Chalre Chalre Waal",
+        youtube_url="https://instagram.com/reels/audio/soft1",
+        platform="instagram",
+        source_id="soft1",
+        artist="Shanzy Sial",
+        audio_url="https://cdn.example.com/audio.mp3",
+        duration_seconds=139,
+    )
+    is_valid, reason = v_filter.evaluate_candidate(soft_cand)
+    assert is_valid is True
+    assert reason is None
+
+
+def test_is_sad_song_detection():
+    """Verify sad song detection accurately catches heartbreak/sad tracks."""
+    from filters import is_sad_song
+    assert is_sad_song("O Re Bewafa", "Asad Naeem") is True
+    assert is_sad_song("Sajna da Dil Torya", "Zeeshan Ali") is True
+    assert is_sad_song("Pyaar Kyun Banaya", "Nehaal Naseem") is True
+    assert is_sad_song("Hamare Baad Mahfil Me", "Mizaa Mizaa") is True
+    assert is_sad_song("Dard Bhari Ghazal", "Singer") is True
+    assert is_sad_song("Slowed Reverb Sad Song", "Artist") is True
+    assert is_sad_song("Baby Doll", "Kanika Kapoor") is False
+

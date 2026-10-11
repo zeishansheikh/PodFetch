@@ -16,7 +16,7 @@ import yt_dlp
 
 from config import AppConfig
 from database import Database, VideoStatus
-from filters import VideoCandidate, VideoFilter
+from filters import VideoCandidate, VideoFilter, is_sad_song
 from logger import get_logger
 
 logger = get_logger("discovery")
@@ -315,6 +315,7 @@ def select_multisource_candidates(
     historical_counts: Dict[str, int],
     exact_limit: Optional[int] = None,
     prefer_vertical: bool = True,
+    prioritize_sad_audio: bool = True,
 ) -> List[VideoCandidate]:
     """Select candidates fairly and intelligently across multiple platforms (YouTube and Pinterest).
 
@@ -399,12 +400,13 @@ def select_multisource_candidates(
             source_pools[source_name] = list(yt_ordered)
 
         elif source_name == "instagram":
-            # Sort Instagram: prioritize popularity_score, reel_count, then trend_rank (lower rank number is better)
-            def sort_key_instagram(c: VideoCandidate) -> Tuple[float, int, int]:
+            # Sort Instagram: prioritize sad songs first (if prioritize_sad_audio), then popularity_score, reel_count, then trend_rank
+            def sort_key_instagram(c: VideoCandidate) -> Tuple[int, float, int, int]:
+                sad_prio = 1 if (prioritize_sad_audio and is_sad_song(c.title, c.artist)) else 0
                 pop = c.popularity_score or 0.0
                 reels = c.reel_count or 0
                 rank_inv = -c.trend_rank if c.trend_rank is not None else -999999
-                return (pop, reels, rank_inv)
+                return (sad_prio, pop, reels, rank_inv)
 
             sorted_ig = sorted(cands, key=sort_key_instagram, reverse=True)
             source_pools[source_name] = list(sorted_ig)

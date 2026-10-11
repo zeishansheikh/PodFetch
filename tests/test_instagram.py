@@ -562,20 +562,20 @@ def test_instagram_poetry_voiceover_filter_rejection(test_config: AppConfig, tes
     assert is_ok is False
     assert "voiceover/poetry" in reason
 
-    # 2. Genuine official song track
+    # 2. Genuine official song track (non-rap)
     song_cand = VideoCandidate(
         youtube_video_id="",
-        channel_id="Talha Anjum",
-        channel_name="Talha Anjum",
-        title="Told My Brother",
+        channel_id="Asad Naeem",
+        channel_name="Asad Naeem",
+        title="O Re Bewafa",
         youtube_url="https://instagram.com/audio/song_1",
         platform="instagram",
         source_id="song_1",
         canonical_url="https://instagram.com/audio/song_1",
-        duration_seconds=216,
+        duration_seconds=175,
         media_type="audio",
-        artist="Talha Anjum, Umair",
-        audio_url="ytsearch1:Told My Brother Talha Anjum, Umair official audio",
+        artist="Asad Naeem",
+        audio_url="ytsearch1:O Re Bewafa Asad Naeem official audio",
         is_authorized=True,
     )
     is_ok, reason = vfilter.evaluate_candidate(song_cand)

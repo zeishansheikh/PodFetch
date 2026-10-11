@@ -5,12 +5,116 @@ and rejecting shorts, livestreams, outdated, or already-processed content.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from config import AppConfig
 from database import Database, VideoStatus
+
+
+RAP_ARTISTS = [
+    "talha anjum",
+    "talhah yunus",
+    "young stunners",
+    "umair",
+    "jokhay",
+    "krsna",
+    "kr$na",
+    "seedhe maut",
+    "mc stan",
+    "emiway",
+    "emiway bantai",
+    "divine",
+    "raftaar",
+    "badshah",
+    "honey singh",
+    "yo yo honey singh",
+    "bohemia",
+    "sidhu moose wala",
+    "shubh",
+    "karan aujla",
+    "dino james",
+    "fotty seven",
+    "rap demon",
+    "chen-k",
+    "sunny khan durrani",
+    "faris shafi",
+    "karma",
+    "epr iyer",
+    "paradox",
+    "king rocco",
+    "mc altaf",
+    "bella",
+    "ikka",
+    "naezy",
+    "smokey the ghost",
+    "ahmer",
+    "sos",
+    "prabh deep",
+    "dhanji",
+    "chardiwari",
+]
+
+RAP_KEYWORDS_REGEX = re.compile(
+    r"\b(rap|raps|rapper|rappers|rapping|hip\s*hop|drill|diss|diss\s*track|cypher|freestyle|trap|bars|spit|type\s*beat)\b",
+    re.IGNORECASE,
+)
+
+
+def is_rap_track(title: Optional[str], artist: Optional[str] = None) -> Tuple[bool, str]:
+    """Identify if a track is rap, hip-hop, drill, or diss track by artist or keywords."""
+    title_clean = (title or "").strip().lower()
+    artist_clean = (artist or "").strip().lower()
+
+    for rap_artist in RAP_ARTISTS:
+        if rap_artist in artist_clean:
+            return True, f"Artist '{artist}' matches known rap artist '{rap_artist}'"
+
+    if RAP_KEYWORDS_REGEX.search(title_clean):
+        return True, f"Title '{title}' contains rap/hip-hop keyword"
+
+    if RAP_KEYWORDS_REGEX.search(artist_clean):
+        return True, f"Artist '{artist}' contains rap/hip-hop keyword"
+
+    return False, ""
+
+
+def is_sad_song(title: Optional[str], artist: Optional[str] = None) -> bool:
+    """Identify if a track is a sad, emotional, heartbreak, slowed, or acoustic song."""
+    title_str = (title or "").strip()
+    artist_str = (artist or "").strip()
+    text = f"{title_str} {artist_str}".lower()
+    if not text.strip():
+        return False
+
+    # Multi-word sad / heartbreak phrases
+    multi_word_phrases = [
+        "heart break", "heartbreak", "broken heart", "dil torya", "dil todeya",
+        "dil toda", "dil toota", "dil tuta", "o re bewafa", "pyaar kyun banaya",
+        "pyar kyu banaya", "hamare baad", "slowed + reverb", "slowed reverb",
+        "slowed & reverb", "dard bhare", "dard bhari", "chhod ke", "chhod gaya",
+        "tuta hua", "toota hua",
+    ]
+    for phrase in multi_word_phrases:
+        if phrase in text:
+            return True
+
+    # Single-word sad / emotional tokens (with word boundaries)
+    sad_tokens = [
+        "sad", "broken", "crying", "alone", "lonely", "pain", "painful",
+        "sorrow", "grief", "tears", "alvida", "goodbye", "melancholy",
+        "depressed", "depressing", "hurt", "dard", "dukh", "dukhi",
+        "toota", "tuta", "toote", "tute", "torya", "todeya", "toda",
+        "judai", "judaai", "bichad", "bichde", "bichhda", "bewafa",
+        "bewafai", "aansu", "ashk", "gham", "tanhai", "tanha", "yaad",
+        "yaadein", "ruswai", "faasle", "fasle", "virah", "kasak",
+        "barbaad", "ghamgeen", "mayus", "ghazal", "lofi", "lo-fi",
+        "acoustic", "slowed",
+    ]
+    pattern = r"\b(" + "|".join(re.escape(w) for w in sad_tokens) + r")\b"
+    return bool(re.search(pattern, text, re.IGNORECASE))
 
 
 @dataclass
@@ -107,6 +211,13 @@ class VideoFilter:
             poetry_keywords = ["original audio", "original sound", "poetry", "shayari", "dialogue", "speech", "status"]
             if title_clean in ("original audio", "original sound") or any(pk in title_clean for pk in poetry_keywords[2:]):
                 return False, f"Track '{candidate.title}' is a user voiceover/poetry reel clip, not an official music song"
+
+            # Exclude rap/hip-hop/drill songs (only soft/normal songs allowed)
+            allow_rap = getattr(self.config, "instagram_allow_rap", False)
+            if not allow_rap:
+                is_rap, rap_reason = is_rap_track(candidate.title, candidate.artist)
+                if is_rap:
+                    return False, f"Track '{candidate.title}' by '{candidate.artist}' is excluded as rap/hip-hop ({rap_reason}); only soft/normal songs are permitted"
 
             if candidate.duration_seconds is not None:
                 min_audio = getattr(self.config, "min_audio_duration_seconds", 0)

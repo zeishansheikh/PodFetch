@@ -268,6 +268,8 @@ class AppConfig:
     instagram_drive_folder_name: str = "trending songs"
     min_audio_duration_seconds: int = 5
     max_audio_duration_seconds: Optional[int] = 420
+    instagram_allow_rap: bool = False
+    instagram_prioritize_sad: bool = True
 
     # Pinterest Specific
     pinterest_keywords: List[str] = field(default_factory=lambda: list(DEFAULT_PINTEREST_KEYWORDS))
@@ -447,6 +449,8 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
         instagram_drive_folder_name=os.getenv("INSTAGRAM_DRIVE_FOLDER_NAME", "trending songs").strip(),
         min_audio_duration_seconds=int(os.getenv("MIN_AUDIO_DURATION_SECONDS", "5")),
         max_audio_duration_seconds=max_audio_duration_seconds,
+        instagram_allow_rap=_parse_bool(os.getenv("INSTAGRAM_ALLOW_RAP", "false"), default=False),
+        instagram_prioritize_sad=_parse_bool(os.getenv("INSTAGRAM_PRIORITIZE_SAD", "true"), default=True),
         pinterest_keywords=pinterest_keywords,
         pinterest_keywords_file=kw_file_path,
         pinterest_access_token=os.getenv("PINTEREST_ACCESS_TOKEN"),

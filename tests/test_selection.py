@@ -74,3 +74,51 @@ def test_selection_never_exceeds_available():
         historical_counts={},
     )
     assert len(selected) == 1
+
+
+def test_instagram_selection_prioritizes_sad_songs():
+    """Verify that sad songs receive first priority in selection over regular songs."""
+    from discovery import select_multisource_candidates
+
+    normal_song = VideoCandidate(
+        youtube_video_id="s1",
+        channel_id="shanzy",
+        channel_name="Shanzy",
+        title="Chalre Chalre Waal",
+        youtube_url="https://instagram.com/reels/audio/s1",
+        platform="instagram",
+        source_id="s1",
+        artist="Shanzy Sial",
+        duration_seconds=139,
+        trend_rank=1,
+        popularity_score=50000.0,
+    )
+    sad_song = VideoCandidate(
+        youtube_video_id="s2",
+        channel_id="asad",
+        channel_name="Asad",
+        title="O Re Bewafa",
+        youtube_url="https://instagram.com/reels/audio/s2",
+        platform="instagram",
+        source_id="s2",
+        artist="Asad Naeem",
+        duration_seconds=175,
+        trend_rank=3,
+        popularity_score=40000.0,
+    )
+
+    candidates = {"instagram": [normal_song, sad_song]}
+    selected = select_multisource_candidates(
+        candidates_by_source=candidates,
+        min_count=1,
+        max_count=1,
+        historical_counts={},
+        exact_limit=1,
+        prioritize_sad_audio=True,
+    )
+
+    assert len(selected) == 1
+    # Even though normal_song has rank 1 and higher popularity score, sad_song is selected first
+    assert selected[0].source_id == "s2"
+    assert selected[0].title == "O Re Bewafa"
+
