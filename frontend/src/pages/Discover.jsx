@@ -24,6 +24,7 @@ export function Discover({ showToast, onNavigate }) {
   const [pinterestKeyword, setPinterestKeyword] = useState('');
   const [pinterestLimit, setPinterestLimit] = useState(10);
 
+  const [instagramQuery, setInstagramQuery] = useState('');
   const [instagramAudioType, setInstagramAudioType] = useState('music');
   const [instagramLimit, setInstagramLimit] = useState(10);
   const [instagramSadFirst, setInstagramSadFirst] = useState(true);
@@ -99,6 +100,9 @@ export function Discover({ showToast, onNavigate }) {
         }
       } else if (activeTab === 'instagram') {
         const data = await api.discoverInstagram({
+          query: instagramQuery.trim() || undefined,
+          target: instagramQuery.trim() || undefined,
+          media_filter: 'video',
           audio_type: instagramAudioType,
           limit: Number(instagramLimit) || 10,
           sad_preference: instagramSadFirst,
@@ -106,13 +110,14 @@ export function Discover({ showToast, onNavigate }) {
         });
 
         if (data.status === 'error') {
-          setError(data.message || 'Instagram audio discovery failed');
+          setError(data.message || 'Instagram video discovery failed');
         } else {
-          setResults(data.tracks || []);
-          if (data.tracks?.length === 0) {
-            showToast('No trending audio tracks returned from Instagram API', 'info');
+          const vids = data.discovered_videos || data.items || data.tracks || [];
+          setResults(vids);
+          if (vids.length === 0) {
+            showToast('No new Instagram videos/reels found matching filter criteria', 'info');
           } else {
-            showToast(`Loaded ${data.tracks.length} trending audio tracks!`, 'success');
+            showToast(`Discovered ${vids.length} Instagram video reels!`, 'success');
           }
         }
       }
@@ -179,6 +184,7 @@ export function Discover({ showToast, onNavigate }) {
     setHasSearched(false);
     if (activeTab === 'youtube') setYoutubeChannel('');
     if (activeTab === 'pinterest') setPinterestKeyword('');
+    if (activeTab === 'instagram') setInstagramQuery('');
   };
 
   return (
@@ -188,7 +194,7 @@ export function Discover({ showToast, onNavigate }) {
         <div>
           <h1 className="page-title">Media Discovery</h1>
           <p className="page-subtitle">
-            Query YouTube channels, Pinterest search terms, and Instagram trending audio feeds.
+            Query YouTube channels, Pinterest video boards, and Instagram video reels (static images strictly excluded).
           </p>
         </div>
       </div>
@@ -229,7 +235,7 @@ export function Discover({ showToast, onNavigate }) {
           }}
         >
           <InstagramIcon size={16} />
-          <span>Instagram Audio</span>
+          <span>Instagram Reels & Videos</span>
         </button>
       </div>
 
@@ -299,52 +305,34 @@ export function Discover({ showToast, onNavigate }) {
           )}
 
           {activeTab === 'instagram' && (
-            <div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: '16px', marginBottom: '14px' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Audio Stream Type</label>
-                  <select
-                    className="form-select"
-                    value={instagramAudioType}
-                    onChange={(e) => setInstagramAudioType(e.target.value)}
-                  >
-                    <option value="music">Commercial / Trending Music</option>
-                    <option value="original">Original Audio / User Sounds</option>
-                  </select>
-                </div>
-
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Limit</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: '16px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Profile Handle, Reel URL, or Search Topic</label>
+                <div className="input-with-icon">
+                  <InstagramIcon className="input-icon" />
                   <input
-                    type="number"
-                    min="1"
-                    max="50"
+                    type="text"
                     className="form-input"
-                    value={instagramLimit}
-                    onChange={(e) => setInstagramLimit(e.target.value)}
+                    placeholder="e.g. @nature, https://www.instagram.com/reel/..., #travel, or leave blank for trending"
+                    value={instagramQuery}
+                    onChange={(e) => setInstagramQuery(e.target.value)}
                   />
+                </div>
+                <div className="form-help">
+                  Discovers video reels strictly (static images are automatically filtered out). Leave empty for trending reels.
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' }}>
-                  <input
-                    type="checkbox"
-                    checked={instagramSadFirst}
-                    onChange={(e) => setInstagramSadFirst(e.target.checked)}
-                    style={{ accentColor: 'var(--accent-primary)' }}
-                  />
-                  <span>Prioritize soft / sad / emotional mood</span>
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' }}>
-                  <input
-                    type="checkbox"
-                    checked={instagramAvoidRap}
-                    onChange={(e) => setInstagramAvoidRap(e.target.checked)}
-                    style={{ accentColor: 'var(--accent-primary)' }}
-                  />
-                  <span>Exclude fast rap & offensive styles</span>
-                </label>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Max Videos</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  className="form-input"
+                  value={instagramLimit}
+                  onChange={(e) => setInstagramLimit(e.target.value)}
+                />
               </div>
             </div>
           )}
@@ -410,7 +398,7 @@ export function Discover({ showToast, onNavigate }) {
       {!loading && results.length > 0 && (
         <div className="media-grid">
           {results.map((item, idx) => {
-            const isAudio = activeTab === 'instagram' || item.audio_asset_id;
+            const isAudio = item.media_type === 'audio' || Boolean(item.audio_asset_id && !item.is_video);
             const itemId = item.video_id || item.source_id || item.pin_id || item.audio_asset_id || item.id || idx;
             const isProcessing = processingId === itemId;
             const thumbUrl = item.thumbnail || item.thumbnail_url;
@@ -422,7 +410,13 @@ export function Discover({ showToast, onNavigate }) {
                     <img src={thumbUrl} alt={item.title} className="media-thumb" loading="lazy" />
                   ) : (
                     <div className="media-thumb-placeholder">
-                      {isAudio ? <InstagramIcon size={36} /> : <YoutubeIcon size={36} />}
+                      {item.platform === 'instagram' ? (
+                        <InstagramIcon size={36} />
+                      ) : item.platform === 'pinterest' ? (
+                        <PinterestIcon size={36} />
+                      ) : (
+                        <YoutubeIcon size={36} />
+                      )}
                     </div>
                   )}
 
@@ -460,7 +454,7 @@ export function Discover({ showToast, onNavigate }) {
 
                 <div className="media-card-body">
                   <div className="media-card-title" title={item.title}>
-                    {item.title || 'Untitled Track / Video'}
+                    {item.title || 'Untitled Video / Track'}
                   </div>
 
                   {item.channel_name || item.channel_title || item.artist || item.artist_name || item.creator ? (
@@ -509,7 +503,7 @@ export function Discover({ showToast, onNavigate }) {
                         onClick={() => handleDownloadVideo(item)}
                       >
                         <Download size={13} className={isProcessing ? 'pulse-spinner' : ''} />
-                        <span>{isProcessing ? 'Queueing...' : 'Download'}</span>
+                        <span>{isProcessing ? 'Queueing...' : 'Download Video'}</span>
                       </button>
                     )}
                   </div>

@@ -9,7 +9,7 @@ import {
   CloudUpload,
   History,
 } from 'lucide-react';
-import { YoutubeIcon, PinterestIcon } from '../components/BrandIcons';
+import { YoutubeIcon, PinterestIcon, InstagramIcon } from '../components/BrandIcons';
 import SourceBadge from '../components/SourceBadge';
 import StatusBadge from '../components/StatusBadge';
 import api from '../api/client';
@@ -32,9 +32,9 @@ export function VideoDownloads({ showToast, onNavigate }) {
     try {
       const data = await api.getJobs({ limit: 12 });
       if (data && data.jobs) {
-        // filter for youtube / pinterest
+        // filter for youtube / pinterest / instagram videos
         const videoJobs = data.jobs.filter(
-          (j) => j.platform === 'youtube' || j.platform === 'pinterest'
+          (j) => j.platform === 'youtube' || j.platform === 'pinterest' || j.platform === 'instagram'
         );
         setHistory(videoJobs);
       }
@@ -65,6 +65,8 @@ export function VideoDownloads({ showToast, onNavigate }) {
     const lowerInput = inputVal.toLowerCase();
     if (lowerInput.includes('pinterest.com') || lowerInput.includes('pin.it')) {
       targetPlatform = 'pinterest';
+    } else if (lowerInput.includes('instagram.com') || lowerInput.includes('instagr.am')) {
+      targetPlatform = 'instagram';
     } else if (lowerInput.includes('youtube.com') || lowerInput.includes('youtu.be')) {
       targetPlatform = 'youtube';
     }
@@ -165,6 +167,15 @@ export function VideoDownloads({ showToast, onNavigate }) {
                 <PinterestIcon size={16} />
                 <span>Pinterest Pin Video</span>
               </button>
+              <button
+                type="button"
+                className={`btn ${platform === 'instagram' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ flex: 1 }}
+                onClick={() => setPlatform('instagram')}
+              >
+                <InstagramIcon size={16} />
+                <span>Instagram Reel / Video</span>
+              </button>
             </div>
           </div>
 
@@ -177,14 +188,16 @@ export function VideoDownloads({ showToast, onNavigate }) {
               placeholder={
                 platform === 'youtube'
                   ? 'Paste YouTube link (watch, shorts, youtu.be) or enter search keyword'
-                  : 'Paste Pinterest Pin link or enter search keyword (e.g. nature aesthetic)'
+                  : platform === 'pinterest'
+                  ? 'Paste Pinterest Pin link or enter search keyword (e.g. nature aesthetic)'
+                  : 'Paste Instagram Reel link or enter search keyword (e.g. @creator, reel link)'
               }
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
               required
             />
             <div className="form-help">
-              Paste any YouTube video link, Pinterest Pin link, or enter a search keyword to automatically download and save to Google Drive.
+              Paste any YouTube video link, Pinterest Pin link, or Instagram Reel link to automatically download and save to Google Drive.
             </div>
           </div>
 

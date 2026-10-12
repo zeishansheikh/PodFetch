@@ -196,10 +196,30 @@ class VideoFilter:
 
         # 2. Exclude static images
         if candidate.is_image:
-            return False, "Static image pins are excluded; only video media is permitted"
+            return False, "Static image pins or posts are excluded; only video media is permitted"
 
-        # 3. Platform-specific filtering: Instagram Trending Audio
+        # 3. Platform-specific filtering: Instagram
         if candidate.platform == "instagram":
+            is_audio = candidate.audio_url is not None or candidate.media_type == "audio"
+            if not is_audio:
+                # For Instagram videos/reels: ensure static images are rejected and duration fits
+                if candidate.is_image:
+                    return False, "Static image pins or posts are excluded; only video media is permitted"
+                if candidate.duration_seconds is not None:
+                    min_sec = getattr(self.config, "min_video_duration_seconds", 0)
+                    max_sec = getattr(self.config, "max_video_duration_seconds", None)
+                    if min_sec > 0 and candidate.duration_seconds < min_sec:
+                        return (
+                            False,
+                            f"Duration ({candidate.duration_seconds}s) is less than minimum required {min_sec}s",
+                        )
+                    if max_sec is not None and candidate.duration_seconds > max_sec:
+                        return (
+                            False,
+                            f"Duration ({candidate.duration_seconds}s) exceeds maximum limit of {max_sec}s",
+                        )
+                return True, None
+
             if not candidate.is_authorized:
                 return False, "Audio track is not authorized for download or reuse"
 

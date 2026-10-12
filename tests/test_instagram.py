@@ -19,6 +19,7 @@ from filters import VideoCandidate, VideoFilter
 from instagram_discovery import (
     InstagramAudioDiscoverer,
     InstagramAudioMetadata,
+    InstagramVideoDiscoverer,
     normalize_meta_base_url,
 )
 from instagram_downloader import InstagramAudioDownloader, InstagramDownloadError
@@ -581,5 +582,124 @@ def test_instagram_poetry_voiceover_filter_rejection(test_config: AppConfig, tes
     is_ok, reason = vfilter.evaluate_candidate(song_cand)
     assert is_ok is True
     assert reason is None
+
+
+def test_instagram_video_candidate_filter_static_image_rejection(test_config: AppConfig, test_db: Database):
+    """Verify that Instagram static image posts are rejected by the filter, while video reels are accepted."""
+    test_config.max_video_duration_seconds = 60
+    vfilter = VideoFilter(test_config, test_db)
+
+    # 1. Static image post (should be rejected)
+    image_cand = VideoCandidate(
+        youtube_video_id="ig_img_1",
+        channel_id="insta_user",
+        channel_name="Instagram Photographer",
+        title="Beautiful sunset photo",
+        youtube_url="https://www.instagram.com/p/photo123/",
+        platform="instagram",
+        source_id="ig_img_1",
+        canonical_url="https://www.instagram.com/p/photo123/",
+        duration_seconds=None,
+        media_type="video",
+        is_image=True,
+    )
+    is_ok, reason = vfilter.evaluate_candidate(image_cand)
+    assert is_ok is False
+    assert "Static image" in reason
+
+    # 2. Video reel (should be accepted)
+    video_cand = VideoCandidate(
+        youtube_video_id="ig_vid_1",
+        channel_id="insta_user",
+        channel_name="Instagram Creator",
+        title="Amazing travel reel",
+        youtube_url="https://www.instagram.com/reel/video123/",
+        platform="instagram",
+        source_id="ig_vid_1",
+        canonical_url="https://www.instagram.com/reel/video123/",
+        duration_seconds=25,
+        media_type="video",
+        is_image=False,
+    )
+    is_ok, reason = vfilter.evaluate_candidate(video_cand)
+    assert is_ok is True
+    assert reason is None
+
+
+def test_instagram_video_discoverer_meta_graph_excludes_images(test_config: AppConfig, test_db: Database):
+    """Verify that InstagramVideoDiscoverer skips IMAGE posts from Meta Graph API and only accepts VIDEO posts."""
+    test_config.max_video_duration_seconds = 60
+    discoverer = InstagramVideoDiscoverer(test_config, test_db)
+
+    mock_media_response = {
+        "data": [
+            {
+                "id": "item_image_1",
+                "caption": "Photo post of a mountain",
+                "media_type": "IMAGE",
+                "media_url": "https://cdn.instagram.com/image.jpg",
+                "permalink": "https://www.instagram.com/p/image1/",
+            },
+            {
+                "id": "item_video_1",
+                "caption": "Video reel of a river",
+                "media_type": "VIDEO",
+                "media_url": "https://cdn.instagram.com/video.mp4",
+                "thumbnail_url": "https://cdn.instagram.com/thumb.jpg",
+                "permalink": "https://www.instagram.com/reel/video1/",
+            },
+        ]
+    }
+
+    with patch("requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = mock_media_response
+        mock_get.return_value = mock_resp
+
+        candidates, examined, skipped, limitations = discoverer.discover_videos(limit=10)
+
+        assert len(candidates) == 1
+        assert candidates[0].source_id == "item_video_1"
+        assert candidates[0].media_type == "video"
+        assert candidates[0].is_image is False
+        assert examined == 2
+        assert skipped == 1  # 1 image skipped
+
+
+def test_instagram_video_discoverer_direct_reel_url(test_config: AppConfig, test_db: Database):
+    """Verify that InstagramVideoDiscoverer inspects a direct Reel URL using yt-dlp."""
+    test_config.max_video_duration_seconds = 60
+    discoverer = InstagramVideoDiscoverer(test_config, test_db)
+
+    reel_url = "https://www.instagram.com/reel/C8xyz123/"
+    mock_info = {
+        "id": "C8xyz123",
+        "title": "Epic Drone Shot Reel",
+        "webpage_url": reel_url,
+        "uploader": "DronePilot",
+        "uploader_id": "dronepilot",
+        "duration": 28,
+        "_type": "video",
+        "vcodec": "h264",
+        "thumbnail": "https://example.com/thumb.jpg",
+    }
+
+    with patch("yt_dlp.YoutubeDL") as mock_ydl_cls:
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = mock_info
+        mock_ydl_cls.return_value.__enter__.return_value = mock_ydl
+
+        candidates, examined, skipped, limitations = discoverer.discover_videos(
+            query=reel_url, limit=5
+        )
+
+        assert len(candidates) == 1
+        cand = candidates[0]
+        assert cand.source_id == "C8xyz123"
+        assert cand.media_type == "video"
+        assert cand.is_image is False
+        assert cand.duration_seconds == 28
+
 
 

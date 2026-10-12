@@ -244,3 +244,93 @@ def test_api_download_instagram_audio_endpoint_queues_job(client):
         assert data["job_id"].startswith("audio-")
         mock_thread.assert_called_once()
 
+
+def test_api_discover_instagram_videos_endpoint(client):
+    from unittest.mock import patch, MagicMock
+    from filters import VideoCandidate
+
+    mock_candidate = VideoCandidate(
+        youtube_video_id="ig_vid_99",
+        channel_id="travel_world",
+        channel_name="Travel World",
+        title="Breathtaking mountain reel",
+        youtube_url="https://www.instagram.com/reel/vid99/",
+        platform="instagram",
+        source_id="ig_vid_99",
+        duration_seconds=20,
+        media_type="video",
+        is_image=False,
+    )
+
+    with patch("api.InstagramVideoDiscoverer") as mock_disc_cls:
+        mock_disc = MagicMock()
+        mock_disc.discover_videos.return_value = ([mock_candidate], 1, 0, [])
+        mock_disc_cls.return_value = mock_disc
+
+        res = client.post("/api/discover/instagram", json={
+            "query": "@travel_world",
+            "media_filter": "video",
+            "limit": 5,
+        })
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "ok"
+        assert len(data["discovered_videos"]) == 1
+        assert data["discovered_videos"][0]["video_id"] == "ig_vid_99"
+        assert data["discovered_videos"][0]["media_type"] == "video"
+        assert data["discovered_videos"][0]["is_video"] is True
+
+
+def test_api_resolve_video_target_instagram_video():
+    from unittest.mock import patch, MagicMock
+    from api import _resolve_video_target
+
+    mock_info = {
+        "id": "reel123",
+        "title": "Scenic Waterfall Reel",
+        "webpage_url": "https://www.instagram.com/reel/reel123/",
+        "uploader": "NatureLover",
+        "duration": 18,
+        "_type": "video",
+        "vcodec": "h264",
+        "thumbnail": "https://example.com/thumb.jpg",
+    }
+
+    with patch("yt_dlp.YoutubeDL") as mock_ydl_cls:
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = mock_info
+        mock_ydl_cls.return_value.__enter__.return_value = mock_ydl
+
+        req = _resolve_video_target("https://www.instagram.com/reel/reel123/")
+        assert req.platform == "instagram"
+        assert req.media_type == "video"
+        assert req.source_id == "reel123"
+        assert req.title == "Scenic Waterfall Reel"
+
+
+def test_api_resolve_video_target_instagram_static_image_rejected():
+    from unittest.mock import patch, MagicMock
+    from fastapi import HTTPException
+    from api import _resolve_video_target
+
+    mock_info = {
+        "id": "photo123",
+        "title": "Static Landscape Photo",
+        "webpage_url": "https://www.instagram.com/p/photo123/",
+        "uploader": "Photographer",
+        "_type": "image",
+        "vcodec": "none",
+    }
+
+    with patch("yt_dlp.YoutubeDL") as mock_ydl_cls:
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = mock_info
+        mock_ydl_cls.return_value.__enter__.return_value = mock_ydl
+
+        with pytest.raises(HTTPException) as exc_info:
+            _resolve_video_target("https://www.instagram.com/p/photo123/")
+
+        assert exc_info.value.status_code == 400
+        assert "static image photo" in exc_info.value.detail.lower()
+
+

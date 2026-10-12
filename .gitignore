@@ -31,6 +31,7 @@ temp/*
 *.db-journal
 *.db-wal
 *.db-shm
+podfetch.db
 
 # Execution and runtime logs
 logs/*.log

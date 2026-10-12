@@ -32,7 +32,7 @@ from discovery import ChannelDiscoverer, select_multisource_candidates
 from downloader import VideoDownloader
 from drive_uploader import GoogleDriveUploader
 from filters import VideoCandidate, VideoFilter, is_rap_track, is_sad_song
-from instagram_discovery import InstagramAudioDiscoverer
+from instagram_discovery import InstagramAudioDiscoverer, InstagramVideoDiscoverer
 from instagram_downloader import InstagramAudioDownloader
 from logger import get_logger
 from main import execute_pipeline
@@ -94,11 +94,12 @@ class DirectDownloadRequest(BaseModel):
     thumbnail_url: Optional[str] = None
     channel_name: Optional[str] = None
     search_keyword: Optional[str] = None
+    media_type: str = "video"
 
 
 class VideoDownloadPayload(BaseModel):
     url: str
-    platform: str = "youtube"
+    platform: Optional[str] = "youtube"
     title: Optional[str] = None
     upload_to_drive: bool = True
 
@@ -123,6 +124,9 @@ class PinterestDiscoverPayload(BaseModel):
 
 
 class InstagramDiscoverPayload(BaseModel):
+    query: Optional[str] = None
+    target: Optional[str] = None
+    media_filter: Optional[str] = "video"
     audio_type: Optional[str] = "music"
     limit: int = 15
     sad_preference: bool = True
@@ -545,15 +549,71 @@ def discover_pinterest(
 
 @app.get("/api/discover/instagram")
 def discover_instagram(
+    query: Optional[str] = Query(None, description="Instagram reel URL, username, handle, hashtag, or keyword"),
+    target: Optional[str] = Query(None, description="Alias for query"),
     audio_type: Optional[str] = Query(None, description="'music' or 'original_sound'"),
+    media_filter: Optional[str] = Query("video", description="'video' to fetch video reels, 'audio' to fetch audio tracks"),
     limit: int = Query(15, ge=1, le=30),
 ) -> Dict[str, Any]:
-    """Discover trending audio tracks from official Instagram Graph API."""
+    """Discover Instagram video reels (strictly excluding static images) or trending audio tracks."""
     config = get_config()
+    db = get_db(config)
+
+    q_str = query.strip() if isinstance(query, str) else ""
+    t_str = target.strip() if isinstance(target, str) else ""
+    effective_query = q_str or t_str
+    m_filter = media_filter if isinstance(media_filter, str) else "video"
+
+    # Video discovery mode (default or requested)
+    if m_filter == "video" or effective_query:
+        video_discoverer = InstagramVideoDiscoverer(config, db)
+        candidates, examined, skipped, limitations = video_discoverer.discover_videos(
+            query=effective_query if effective_query else None,
+            limit=limit,
+        )
+        items: List[Dict[str, Any]] = []
+        for c in candidates:
+            is_processed = db.is_video_processed(c.source_id, platform="instagram")
+            items.append({
+                "source_id": c.source_id,
+                "video_id": c.source_id,
+                "id": c.source_id,
+                "title": c.title,
+                "channel_name": c.channel_name or "Instagram Creator",
+                "channel_title": c.channel_name or "Instagram Creator",
+                "artist": c.channel_name or "Instagram Creator",
+                "artist_name": c.channel_name or "Instagram Creator",
+                "uploader": c.channel_name or "Instagram Creator",
+                "creator": c.channel_name or "Instagram Creator",
+                "canonical_url": c.canonical_url,
+                "url": c.canonical_url,
+                "thumbnail": c.thumbnail_url or f"https://i.ytimg.com/vi/{c.source_id}/hqdefault.jpg",
+                "thumbnail_url": c.thumbnail_url or f"https://i.ytimg.com/vi/{c.source_id}/hqdefault.jpg",
+                "duration_seconds": c.duration_seconds,
+                "duration": c.duration_seconds,
+                "is_video": True,
+                "is_image": False,
+                "media_type": "video",
+                "platform": "instagram",
+                "is_processed": is_processed,
+            })
+        return {
+            "available": True,
+            "account_id": config.instagram_account_id,
+            "media_filter": "video",
+            "total_examined": examined,
+            "total_skipped": skipped,
+            "total_found": len(items),
+            "items": items,
+            "discovered_videos": items,
+            "tracks": items,
+            "limitations": limitations,
+        }
+
+    # Audio discovery mode:
     if audio_type:
         config.instagram_audio_type = audio_type
 
-    db = get_db(config)
     discoverer = InstagramAudioDiscoverer(config, db)
     is_available, error_msg = discoverer.check_api_availability()
 
@@ -563,14 +623,17 @@ def discover_instagram(
             "reason": error_msg or "Instagram API access is unconfigured or unauthorized",
             "account_id": config.instagram_account_id,
             "audio_type": config.instagram_audio_type,
+            "media_filter": "audio",
             "total_found": 0,
             "items": [],
+            "discovered_videos": [],
+            "tracks": [],
             "limitations": [error_msg] if error_msg else [],
         }
 
     try:
         candidates, examined, skipped, limitations = discoverer.discover_trending_audio(limit=limit)
-        items: List[Dict[str, Any]] = []
+        items = []
         for c in candidates:
             is_processed = db.is_video_processed(c.source_id, platform="instagram")
             is_sad = is_sad_song(c.title, c.artist)
@@ -598,16 +661,20 @@ def discover_instagram(
                 "rap_reason": rap_reason if is_rap else None,
                 "is_processed": is_processed,
                 "platform": "instagram",
+                "media_type": "audio",
             })
 
         return {
             "available": True,
             "account_id": config.instagram_account_id,
             "audio_type": config.instagram_audio_type,
+            "media_filter": "audio",
             "total_examined": examined,
             "total_skipped": skipped,
             "total_found": len(items),
             "items": items,
+            "discovered_videos": items,
+            "tracks": items,
             "limitations": limitations,
         }
     except Exception as e:
@@ -617,8 +684,11 @@ def discover_instagram(
             "reason": f"Instagram discovery failed: {e}",
             "account_id": config.instagram_account_id,
             "audio_type": config.instagram_audio_type,
+            "media_filter": "audio",
             "total_found": 0,
             "items": [],
+            "discovered_videos": [],
+            "tracks": [],
             "limitations": [str(e)],
         }
 
@@ -760,7 +830,7 @@ def direct_download(req: DirectDownloadRequest) -> Dict[str, Any]:
     )
 
     try:
-        if req.platform == "instagram":
+        if req.platform == "instagram" and req.media_type != "video":
             downloader = InstagramAudioDownloader(config)
             audio_path, meta_path = downloader.download_audio(cand)
             downloaded_at = datetime.now(timezone.utc).isoformat()
@@ -890,13 +960,13 @@ def direct_download(req: DirectDownloadRequest) -> Dict[str, Any]:
                 "drive_path": drive_path,
             }
 
-        elif req.platform == "youtube":
+        elif req.platform in ("youtube", "instagram"):
             y_downloader = VideoDownloader(config)
             vid_path = y_downloader.download_video(cand)
             downloaded_at = datetime.now(timezone.utc).isoformat()
             db.update_status(
                 source_id=cand.source_id,
-                platform="youtube",
+                platform=req.platform,
                 status=VideoStatus.DOWNLOADED,
                 downloaded_at=downloaded_at,
             )
@@ -908,22 +978,22 @@ def direct_download(req: DirectDownloadRequest) -> Dict[str, Any]:
                 try:
                     drive_uploader = GoogleDriveUploader(config)
                     clean_filename = generate_source_filename(
-                        platform="youtube",
-                        keyword_or_channel=cand.channel_name or "youtube",
+                        platform=req.platform,
+                        keyword_or_channel=cand.channel_name or cand.search_keyword or "video",
                         source_id=cand.source_id,
                         extension="mp4",
                     )
                     drive_file_id, drive_path = drive_uploader.upload_video(
-                        vid_path, custom_filename=clean_filename, platform="youtube"
+                        vid_path, custom_filename=clean_filename, platform=req.platform
                     )
                 except Exception as upload_err:
-                    logger.error(f"Google Drive upload failed for YouTube video {cand.title}: {upload_err}", exc_info=True)
+                    logger.error(f"Google Drive upload failed for {req.platform} video {cand.title}: {upload_err}", exc_info=True)
 
             if drive_file_id:
                 uploaded_at = datetime.now(timezone.utc).isoformat()
                 db.update_status(
                     source_id=cand.source_id,
-                    platform="youtube",
+                    platform=req.platform,
                     status=VideoStatus.UPLOADED,
                     drive_file_id=drive_file_id,
                     drive_path=drive_path,
@@ -933,7 +1003,7 @@ def direct_download(req: DirectDownloadRequest) -> Dict[str, Any]:
             return {
                 "success": True,
                 "status": "UPLOADED" if drive_file_id else "DOWNLOADED",
-                "message": f"Successfully processed YouTube video '{req.title}'" + (f" and uploaded to Google Drive ({drive_file_id})" if drive_file_id else ""),
+                "message": f"Successfully processed {req.platform.capitalize()} video '{req.title}'" + (f" and uploaded to Google Drive ({drive_file_id})" if drive_file_id else ""),
                 "filename": vid_path.name,
                 "file_size": vid_path.stat().st_size if vid_path.exists() else 0,
                 "drive_file_id": drive_file_id,
@@ -1052,17 +1122,88 @@ def _resolve_video_target(
 
     # Normalize scheme if domain appears without http(s)://
     if not target_str.startswith("http://") and not target_str.startswith("https://"):
-        if any(d in low for d in ("youtube.com", "youtu.be", "pinterest.com", "pin.it")) or target_str.startswith("www."):
+        if any(d in low for d in ("youtube.com", "youtu.be", "pinterest.com", "pin.it", "instagram.com", "instagr.am")) or target_str.startswith("www."):
             target_str = f"https://{target_str}"
             low = target_str.lower()
 
     # Determine platform
     if "pinterest.com" in low or "pin.it" in low:
         effective_platform = "pinterest"
+    elif "instagram.com" in low or "instagr.am" in low:
+        effective_platform = "instagram"
     elif "youtube.com" in low or "youtu.be" in low:
         effective_platform = "youtube"
     else:
         effective_platform = platform_hint.lower() if platform_hint else "youtube"
+
+    if effective_platform == "instagram":
+        if target_str.startswith("http://") or target_str.startswith("https://"):
+            ydl_opts = {"extract_flat": True, "quiet": True}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                try:
+                    info = ydl.extract_info(target_str, download=False)
+                    if info.get("_type") == "image" or info.get("vcodec") == "none":
+                        raise HTTPException(
+                            status_code=400,
+                            detail="This Instagram post is a static image photo. PodFetch only downloads video media and reels."
+                        )
+                    vid_id = str(info.get("id") or "ig_video")
+                    return DirectDownloadRequest(
+                        platform="instagram",
+                        media_type="video",
+                        source_id=vid_id,
+                        title=info.get("title") or f"Instagram Video {vid_id}",
+                        canonical_url=info.get("webpage_url") or target_str,
+                        channel_name=info.get("uploader") or "Instagram",
+                        duration_seconds=info.get("duration"),
+                        thumbnail_url=info.get("thumbnail"),
+                        search_keyword="instagram",
+                    )
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    if "no video" in str(e).lower():
+                        raise HTTPException(
+                            status_code=400,
+                            detail="This Instagram post is a static image photo. PodFetch only downloads video media and reels."
+                        )
+                    vid_id = f"ig_{uuid.uuid4().hex[:8]}"
+                    return DirectDownloadRequest(
+                        platform="instagram",
+                        media_type="video",
+                        source_id=vid_id,
+                        title=f"Instagram Reel {vid_id}",
+                        canonical_url=target_str,
+                        channel_name="Instagram",
+                        duration_seconds=30,
+                        search_keyword="instagram",
+                    )
+        else:
+            query = f"ytsearch1:{target_str} instagram reel"
+            ydl_opts = {"extract_flat": True, "quiet": True}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                try:
+                    res = ydl.extract_info(query, download=False)
+                    entries = res.get("entries", [])
+                    if not entries:
+                        raise HTTPException(status_code=404, detail=f"No Instagram video reels found for '{target_str}'.")
+                    entry = entries[0]
+                    vid_id = str(entry.get("id") or "ig_video")
+                    return DirectDownloadRequest(
+                        platform="instagram",
+                        media_type="video",
+                        source_id=vid_id,
+                        title=entry.get("title") or f"Instagram Video {vid_id}",
+                        canonical_url=entry.get("webpage_url") or f"https://www.youtube.com/watch?v={vid_id}",
+                        channel_name=entry.get("uploader") or "Instagram",
+                        duration_seconds=entry.get("duration"),
+                        thumbnail_url=entry.get("thumbnail"),
+                        search_keyword=target_str,
+                    )
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Failed to find Instagram video: {e}")
 
     if effective_platform == "pinterest":
         # Resolve shortlinks (pin.it)
@@ -1196,6 +1337,8 @@ def download_video_endpoint(payload: VideoDownloadPayload) -> Dict[str, Any]:
     low = payload.url.lower()
     if "pinterest.com" in low or "pin.it" in low:
         platform_hint = "pinterest"
+    elif "instagram.com" in low or "instagr.am" in low:
+        platform_hint = "instagram"
     elif "youtube.com" in low or "youtu.be" in low:
         platform_hint = "youtube"
 
@@ -1328,12 +1471,22 @@ def discover_pinterest_post(payload: PinterestDiscoverPayload) -> Dict[str, Any]
 @app.post("/api/discover/instagram")
 def discover_instagram_post(payload: InstagramDiscoverPayload) -> Dict[str, Any]:
     """POST endpoint for Instagram discovery."""
-    res = discover_instagram(audio_type=payload.audio_type, limit=payload.limit)
+    q = payload.query or payload.target
+    res = discover_instagram(
+        query=q,
+        target=None,
+        audio_type=payload.audio_type,
+        media_filter=payload.media_filter or "video",
+        limit=payload.limit or 15,
+    )
+    items = res.get("items", [])
     return {
-        "status": "error" if not res.get("available") and "reason" in res else "ok",
+        "status": "error" if not res.get("available") and "reason" in res and not items else "ok",
         "message": res.get("reason"),
-        "tracks": res.get("items", []),
-        "total_found": res.get("total_found", 0),
+        "tracks": items,
+        "discovered_videos": items,
+        "items": items,
+        "total_found": len(items),
     }
 
 

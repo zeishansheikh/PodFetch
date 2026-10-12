@@ -13,8 +13,10 @@ import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+import uuid
 
 import requests
+import yt_dlp
 
 from config import AppConfig
 from database import Database
@@ -411,5 +413,196 @@ class InstagramAudioDiscoverer:
             logger.warning(limitation_msg)
             limitations.append(limitation_msg)
             return [], 0, 0, limitations
+
+        return candidates, total_examined, total_skipped, limitations
+ 
+ 
+class InstagramVideoDiscoverer:
+    """Discovers Instagram video reels, enforces strict exclusion of static images,
+    and returns verified video candidates for playback and download."""
+
+    def __init__(self, config: AppConfig, db: Database) -> None:
+        self.config = config
+        self.db = db
+        self.filter = VideoFilter(config, db)
+
+    def discover_videos(
+        self, query: Optional[str] = None, limit: int = 10
+    ) -> Tuple[List[VideoCandidate], int, int, List[str]]:
+        """Query Instagram for videos/reels and strictly exclude static images.
+
+        Supports:
+        - Direct Instagram Reel / Video link (e.g. https://www.instagram.com/reel/...)
+        - Instagram profile / handle (e.g. @natgeo, natgeo)
+        - Search query / hashtag (e.g. #nature, travel reels)
+        - Default discovery (queries Meta Graph API video media, with fallback to trending reels)
+
+        Returns:
+            Tuple of:
+            - List of accepted VideoCandidate objects (media_type="video", is_image=False)
+            - Total items examined
+            - Total items skipped (including static images and duplicates)
+            - List of limitation/error messages
+        """
+        candidates: List[VideoCandidate] = []
+        total_examined = 0
+        total_skipped = 0
+        limitations: List[str] = []
+
+        target_q = (query or "").strip()
+
+        # 1. Direct Instagram Video / Reel link probe
+        if target_q.startswith("http://") or target_q.startswith("https://"):
+            total_examined += 1
+            low = target_q.lower()
+            if "instagram.com" in low or "instagr.am" in low:
+                # Probing Instagram direct post
+                ydl_opts = {"extract_flat": True, "quiet": True}
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    try:
+                        info = ydl.extract_info(target_q, download=False)
+                        # Detect static images
+                        if info.get("_type") == "image" or info.get("vcodec") == "none":
+                            total_skipped += 1
+                            limitations.append("The provided Instagram post is a static image photo; only video reels are accepted.")
+                            return [], total_examined, total_skipped, limitations
+
+                        vid_id = str(info.get("id") or "ig_video")
+                        cand = VideoCandidate(
+                            youtube_video_id=vid_id,
+                            channel_id=info.get("uploader_id") or "instagram",
+                            channel_name=info.get("uploader") or info.get("channel") or "Instagram Creator",
+                            title=info.get("title") or f"Instagram Reel {vid_id}",
+                            youtube_url=info.get("webpage_url") or target_q,
+                            platform="instagram",
+                            source_id=vid_id,
+                            canonical_url=info.get("webpage_url") or target_q,
+                            search_keyword="instagram_reel",
+                            published_at=datetime.now(timezone.utc),
+                            duration_seconds=info.get("duration"),
+                            media_type="video",
+                            is_image=False,
+                            thumbnail_url=info.get("thumbnail"),
+                        )
+                        is_valid, reason = self.filter.evaluate_candidate(cand)
+                        if is_valid:
+                            candidates.append(cand)
+                        else:
+                            total_skipped += 1
+                            if reason:
+                                limitations.append(reason)
+                        return candidates, total_examined, total_skipped, limitations
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if "no video" in err_str:
+                            total_skipped += 1
+                            limitations.append("The Instagram post is a static image photo with no video stream.")
+                            return [], total_examined, total_skipped, limitations
+                        limitations.append(f"Instagram link probe notice: {e}")
+
+        # 2. Check official Meta Graph API media endpoint (for account videos) if no custom query
+        if not target_q and self.config.instagram_account_id and self.config.instagram_access_token:
+            base = normalize_meta_base_url(
+                getattr(self.config, "instagram_api_base_url", "https://graph.facebook.com/v21.0")
+            )
+            media_url = f"{base}/{self.config.instagram_account_id}/media"
+            params = {
+                "access_token": self.config.instagram_access_token,
+                "fields": "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp",
+                "limit": limit,
+            }
+            try:
+                resp = requests.get(media_url, params=params, timeout=15)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    media_items = data.get("data", [])
+                    total_examined += len(media_items)
+                    for item in media_items:
+                        # STRICT EXCLUSION: Filter out static images!
+                        m_type = str(item.get("media_type") or "").upper()
+                        if m_type != "VIDEO":
+                            total_skipped += 1
+                            logger.debug(f"Skipping static Instagram media {item.get('id')} with type {m_type}")
+                            continue
+
+                        v_id = str(item.get("id"))
+                        caption = str(item.get("caption") or f"Instagram Video {v_id}").strip()
+                        permalink = str(item.get("permalink") or f"https://www.instagram.com/p/{v_id}/")
+                        thumb = item.get("thumbnail_url") or item.get("media_url")
+
+                        cand = VideoCandidate(
+                            youtube_video_id=v_id,
+                            channel_id=self.config.instagram_account_id,
+                            channel_name="Instagram Account",
+                            title=caption[:100],
+                            youtube_url=permalink,
+                            platform="instagram",
+                            source_id=v_id,
+                            canonical_url=permalink,
+                            search_keyword="account_video",
+                            published_at=datetime.now(timezone.utc),
+                            duration_seconds=None,
+                            media_type="video",
+                            is_image=False,
+                            thumbnail_url=thumb,
+                        )
+                        is_valid, reason = self.filter.evaluate_candidate(cand)
+                        if is_valid:
+                            candidates.append(cand)
+                        else:
+                            total_skipped += 1
+                            if reason:
+                                limitations.append(reason)
+
+                    if candidates:
+                        return candidates, total_examined, total_skipped, limitations
+                else:
+                    logger.debug(f"Meta Graph API media returned status {resp.status_code}")
+            except Exception as e:
+                logger.debug(f"Meta Graph API media query failed: {e}")
+
+        # 3. Handle query (username, hashtag, or keyword) OR fallback to trending reels
+        if target_q:
+            clean_query = target_q.lstrip("@").strip()
+            search_pattern = f"ytsearch{limit}:{clean_query} instagram reel"
+        else:
+            search_pattern = f"ytsearch{limit}:trending instagram reels video"
+
+        ydl_opts = {"extract_flat": True, "quiet": True}
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                res = ydl.extract_info(search_pattern, download=False)
+                entries = res.get("entries", [])
+                total_examined += len(entries)
+                for entry in entries:
+                    if not entry:
+                        continue
+                    vid_id = str(entry.get("id") or f"ig_{len(candidates)}")
+                    cand = VideoCandidate(
+                        youtube_video_id=vid_id,
+                        channel_id=str(entry.get("channel_id") or "instagram"),
+                        channel_name=entry.get("uploader") or entry.get("channel") or "Instagram Reels",
+                        title=entry.get("title") or f"Instagram Video {vid_id}",
+                        youtube_url=entry.get("webpage_url") or f"https://www.youtube.com/watch?v={vid_id}",
+                        platform="instagram",
+                        source_id=vid_id,
+                        canonical_url=entry.get("webpage_url") or f"https://www.youtube.com/watch?v={vid_id}",
+                        search_keyword=target_q or "trending_reels",
+                        published_at=datetime.now(timezone.utc),
+                        duration_seconds=entry.get("duration"),
+                        media_type="video",
+                        is_image=False,
+                        thumbnail_url=entry.get("thumbnail") or f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg",
+                    )
+                    is_valid, reason = self.filter.evaluate_candidate(cand)
+                    if is_valid:
+                        candidates.append(cand)
+                    else:
+                        total_skipped += 1
+                        if reason:
+                            limitations.append(reason)
+        except Exception as e:
+            logger.error(f"Instagram video discovery failed: {e}", exc_info=True)
+            limitations.append(str(e))
 
         return candidates, total_examined, total_skipped, limitations
