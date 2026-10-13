@@ -19,7 +19,9 @@ Built for headless Linux cloud machines, Cron jobs, systemd timers, Docker conta
 - **Headless & Unattended**: No GUI, no browser popups, zero manual intervention required.
 - **Companion Metadata**: Companion `.json` metadata files are uploaded alongside each downloaded audio file to Google Drive.
 - **Dedicated Google Drive Isolation**:
-  - Separate folders for each platform: `google_drive_folder_id/instagram/`, `google_drive_folder_id/pinterest/`, and `google_drive_folder_id/youtube/`.
+  - Separate folders for each platform: `google_drive_folder_id/instagram/`, `google_drive_folder_id/pinterest/`, `google_drive_folder_id/youtube/`, and `google_drive_folder_id/islamic/`.
+- **Automated Quran Ayah Reel Builder (`islamic` feature)**:
+  - Generates production-ready 1080x1920@60fps reels combining precision-cut Quran recitations with Urdu translations, authentic Tanzil Uthmani calligraphy, and vetted Pinterest backgrounds. See [`quran/README.md`](quran/README.md) for full documentation.
 - **Fair & Balanced Selection**: Balances selections across enabled platforms in a round-robin strategy, prioritizing top trending Instagram audio, vertical 9:16 Pinterest videos, and recent YouTube uploads.
 - **Robust SQLite Deduplication**:
   - Persistent SQLite database (`downloads.db`) with composite unique constraint on `(platform, source_id)`.
