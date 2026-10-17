@@ -133,6 +133,58 @@ export const api = {
   getSettings: () => request('/settings'),
 
   getLogs: (lines = 100) => request(`/logs?lines=${lines}`),
+
+  // Nature Cinematic Reel Maker Workflows
+  getNatureProfile: () => request('/nature/profile'),
+  updateNatureProfile: (payload) =>
+    request('/nature/profile', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  getNatureCategories: () => request('/nature/categories'),
+  getNatureCandidates: (params = {}) => {
+    const query = new URLSearchParams();
+    if (params.category) query.append('category', params.category);
+    if (params.limit) query.append('limit', params.limit);
+    const qs = query.toString();
+    return request(`/nature/candidates${qs ? `?${qs}` : ''}`);
+  },
+  getNatureReels: (params = {}) => {
+    const query = new URLSearchParams();
+    if (params.status) query.append('status', params.status);
+    if (params.limit) query.append('limit', params.limit);
+    const qs = query.toString();
+    return request(`/nature/reels${qs ? `?${qs}` : ''}`);
+  },
+  getNatureReel: (reelId) => request(`/nature/reels/${reelId}`),
+  updateNatureDraft: (reelId, payload) =>
+    request(`/nature/reels/${reelId}/draft`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  approveNatureReel: (reelId) =>
+    request(`/nature/reels/${reelId}/approve`, {
+      method: 'POST',
+    }),
+  rejectNatureReel: (reelId) =>
+    request(`/nature/reels/${reelId}/reject`, {
+      method: 'POST',
+    }),
+  rerenderNatureReel: (reelId, payload) =>
+    request(`/nature/reels/${reelId}/rerender`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  runNaturePipeline: (payload) =>
+    request('/nature/pipeline/run', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  stopNaturePipeline: () =>
+    request('/nature/pipeline/stop', {
+      method: 'POST',
+    }),
+  getNatureStatus: () => request('/nature/status'),
 };
 
 export default api;

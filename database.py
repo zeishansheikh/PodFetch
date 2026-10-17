@@ -166,6 +166,125 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_videos_keyword ON videos(search_keyword)"
             )
 
+            # Nature Cinematic Reel Maker Tables
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS nature_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    categories TEXT NOT NULL,
+                    custom_keywords TEXT,
+                    excluded_terms TEXT,
+                    search_limit INTEGER DEFAULT 15,
+                    daily_processing_limit INTEGER DEFAULT 10,
+                    min_quality_score REAL DEFAULT 65.0,
+                    is_active INTEGER DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS nature_candidates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id TEXT UNIQUE NOT NULL,
+                    platform TEXT DEFAULT 'pinterest',
+                    title TEXT,
+                    canonical_url TEXT,
+                    category TEXT NOT NULL,
+                    search_keyword TEXT,
+                    width INTEGER,
+                    height INTEGER,
+                    duration_seconds REAL,
+                    fps REAL,
+                    bitrate INTEGER,
+                    thumbnail_url TEXT,
+                    creator_attribution TEXT,
+                    overall_score REAL DEFAULT 0.0,
+                    technical_score REAL DEFAULT 0.0,
+                    visual_clarity_score REAL DEFAULT 0.0,
+                    vertical_suitability_score REAL DEFAULT 0.0,
+                    scenic_relevance_score REAL DEFAULT 0.0,
+                    is_eligible INTEGER DEFAULT 1,
+                    eligibility_status TEXT DEFAULT 'ELIGIBLE',
+                    rejection_reason TEXT,
+                    raw_metadata TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_nature_candidates_category ON nature_candidates(category)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_nature_candidates_eligibility ON nature_candidates(eligibility_status)"
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS nature_reels (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id TEXT NOT NULL,
+                    candidate_url TEXT,
+                    category TEXT NOT NULL,
+                    keyword TEXT,
+                    original_video_path TEXT,
+                    rendered_reel_path TEXT,
+                    thumbnail_path TEXT,
+                    thought_text TEXT NOT NULL,
+                    caption TEXT NOT NULL,
+                    hashtags TEXT,
+                    title_hook TEXT,
+                    creator_attribution TEXT,
+                    template_name TEXT DEFAULT 'Nature Cinematic — Thought Reel',
+                    template_version TEXT DEFAULT '1.0.0',
+                    composition_mode TEXT DEFAULT 'crop',
+                    duration_seconds REAL DEFAULT 10.0,
+                    width INTEGER DEFAULT 1080,
+                    height INTEGER DEFAULT 1920,
+                    fps INTEGER DEFAULT 30,
+                    ai_model_name TEXT,
+                    status TEXT DEFAULT 'PENDING',
+                    drive_file_id TEXT,
+                    drive_link TEXT,
+                    uploaded_at TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_nature_reels_status ON nature_reels(status)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_nature_reels_category ON nature_reels(category)"
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS nature_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT UNIQUE NOT NULL,
+                    stage TEXT DEFAULT 'IDLE',
+                    progress INTEGER DEFAULT 0,
+                    total_candidates INTEGER DEFAULT 0,
+                    processed_candidates INTEGER DEFAULT 0,
+                    rendered_reels INTEGER DEFAULT 0,
+                    current_category TEXT,
+                    current_keyword TEXT,
+                    error_message TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_nature_jobs_job_id ON nature_jobs(job_id)"
+            )
+
     def is_video_processed(self, source_id: str, platform: str = "youtube") -> bool:
         """Check if video has already been successfully uploaded or intentionally skipped."""
         with self.get_connection() as conn:
@@ -497,3 +616,364 @@ class Database:
                 "channel_stats": channel_stats,
                 "recent_failures": recent_failures,
             }
+
+    # ---------------- Nature Cinematic Reel Maker Persistence ----------------
+
+    def save_nature_profile(self, profile_data: Dict[str, Any]) -> None:
+        """Insert or update Nature search profile."""
+        import json
+
+        categories_json = json.dumps(profile_data.get("categories", []))
+        custom_kw_json = json.dumps(profile_data.get("custom_keywords", {}))
+        excluded_json = json.dumps(profile_data.get("excluded_terms", []))
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO nature_profiles (
+                    name, categories, custom_keywords, excluded_terms,
+                    search_limit, daily_processing_limit, min_quality_score,
+                    is_active, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    categories = excluded.categories,
+                    custom_keywords = excluded.custom_keywords,
+                    excluded_terms = excluded.excluded_terms,
+                    search_limit = excluded.search_limit,
+                    daily_processing_limit = excluded.daily_processing_limit,
+                    min_quality_score = excluded.min_quality_score,
+                    is_active = excluded.is_active,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    profile_data.get("name", "Nature Cinematic Reels"),
+                    categories_json,
+                    custom_kw_json,
+                    excluded_json,
+                    int(profile_data.get("search_limit", 15)),
+                    int(profile_data.get("daily_processing_limit", 10)),
+                    float(profile_data.get("min_quality_score", 65.0)),
+                    1 if profile_data.get("is_active", True) else 0,
+                    now,
+                ),
+            )
+
+    def get_nature_profile(self, name: str = "Nature Cinematic Reels") -> Optional[Dict[str, Any]]:
+        """Fetch Nature profile by name."""
+        import json
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM nature_profiles WHERE name = ? LIMIT 1", (name,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            res = dict(row)
+            try:
+                res["categories"] = json.loads(res["categories"])
+            except Exception:
+                res["categories"] = []
+            try:
+                res["custom_keywords"] = json.loads(res["custom_keywords"] or "{}")
+            except Exception:
+                res["custom_keywords"] = {}
+            try:
+                res["excluded_terms"] = json.loads(res["excluded_terms"] or "[]")
+            except Exception:
+                res["excluded_terms"] = []
+            res["is_active"] = bool(res["is_active"])
+            return res
+
+    def save_nature_candidate(self, candidate_data: Dict[str, Any]) -> int:
+        """Insert or update a discovered nature video candidate."""
+        import json
+
+        now = datetime.now(timezone.utc).isoformat()
+        raw_meta = json.dumps(candidate_data.get("raw_metadata", {}))
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO nature_candidates (
+                    source_id, platform, title, canonical_url, category,
+                    search_keyword, width, height, duration_seconds, fps,
+                    bitrate, thumbnail_url, creator_attribution, overall_score,
+                    technical_score, visual_clarity_score, vertical_suitability_score,
+                    scenic_relevance_score, is_eligible, eligibility_status,
+                    rejection_reason, raw_metadata, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_id) DO UPDATE SET
+                    title = COALESCE(excluded.title, nature_candidates.title),
+                    width = COALESCE(excluded.width, nature_candidates.width),
+                    height = COALESCE(excluded.height, nature_candidates.height),
+                    duration_seconds = COALESCE(excluded.duration_seconds, nature_candidates.duration_seconds),
+                    fps = COALESCE(excluded.fps, nature_candidates.fps),
+                    bitrate = COALESCE(excluded.bitrate, nature_candidates.bitrate),
+                    overall_score = excluded.overall_score,
+                    technical_score = excluded.technical_score,
+                    visual_clarity_score = excluded.visual_clarity_score,
+                    vertical_suitability_score = excluded.vertical_suitability_score,
+                    scenic_relevance_score = excluded.scenic_relevance_score,
+                    is_eligible = excluded.is_eligible,
+                    eligibility_status = excluded.eligibility_status,
+                    rejection_reason = excluded.rejection_reason,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    candidate_data.get("source_id"),
+                    candidate_data.get("platform", "pinterest"),
+                    candidate_data.get("title", ""),
+                    candidate_data.get("canonical_url", ""),
+                    candidate_data.get("category", "mountains"),
+                    candidate_data.get("search_keyword", ""),
+                    candidate_data.get("width"),
+                    candidate_data.get("height"),
+                    candidate_data.get("duration_seconds"),
+                    candidate_data.get("fps"),
+                    candidate_data.get("bitrate"),
+                    candidate_data.get("thumbnail_url"),
+                    candidate_data.get("creator_attribution"),
+                    candidate_data.get("overall_score", 0.0),
+                    candidate_data.get("technical_score", 0.0),
+                    candidate_data.get("visual_clarity_score", 0.0),
+                    candidate_data.get("vertical_suitability_score", 0.0),
+                    candidate_data.get("scenic_relevance_score", 0.0),
+                    1 if candidate_data.get("is_eligible", True) else 0,
+                    candidate_data.get("eligibility_status", "ELIGIBLE"),
+                    candidate_data.get("rejection_reason"),
+                    raw_meta,
+                    now,
+                ),
+            )
+            return cursor.lastrowid
+
+    def get_nature_candidates(self, category: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """Retrieve recent nature candidates, optionally filtered by category."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if category:
+                cursor.execute(
+                    "SELECT * FROM nature_candidates WHERE category = ? ORDER BY created_at DESC LIMIT ?",
+                    (category, limit),
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM nature_candidates ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                )
+            return [dict(r) for r in cursor.fetchall()]
+
+    def get_all_nature_candidate_ids(self) -> set:
+        """Fetch all previously discovered or processed nature candidate source IDs."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT source_id FROM nature_candidates")
+            cands = {row["source_id"] for row in cursor.fetchall()}
+            cursor.execute("SELECT source_id FROM nature_reels")
+            reels = {row["source_id"] for row in cursor.fetchall()}
+            return cands.union(reels)
+
+    def save_nature_reel(self, reel_data: Dict[str, Any]) -> int:
+        """Insert a newly rendered nature reel."""
+        import json
+
+        tags_val = reel_data.get("hashtags", [])
+        tags_str = json.dumps(tags_val) if isinstance(tags_val, list) else str(tags_val)
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO nature_reels (
+                    source_id, candidate_url, category, keyword,
+                    original_video_path, rendered_reel_path, thumbnail_path,
+                    thought_text, caption, hashtags, title_hook,
+                    creator_attribution, template_name, template_version,
+                    composition_mode, duration_seconds, width, height, fps,
+                    ai_model_name, status, drive_file_id, drive_link,
+                    uploaded_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    reel_data.get("source_id", ""),
+                    reel_data.get("candidate_url", ""),
+                    reel_data.get("category", "mountains"),
+                    reel_data.get("keyword", ""),
+                    reel_data.get("original_video_path", ""),
+                    reel_data.get("rendered_reel_path", ""),
+                    reel_data.get("thumbnail_path"),
+                    reel_data.get("thought_text", ""),
+                    reel_data.get("caption", ""),
+                    tags_str,
+                    reel_data.get("title_hook"),
+                    reel_data.get("creator_attribution"),
+                    reel_data.get("template_name", "Nature Cinematic — Thought Reel"),
+                    reel_data.get("template_version", "1.0.0"),
+                    reel_data.get("composition_mode", "crop"),
+                    float(reel_data.get("duration_seconds", 10.0)),
+                    int(reel_data.get("width", 1080)),
+                    int(reel_data.get("height", 1920)),
+                    int(reel_data.get("fps", 30)),
+                    reel_data.get("ai_model_name", "openai/gpt-oss-20b"),
+                    reel_data.get("status", "PENDING"),
+                    reel_data.get("drive_file_id"),
+                    reel_data.get("drive_link"),
+                    reel_data.get("uploaded_at"),
+                    now,
+                    now,
+                ),
+            )
+            return cursor.lastrowid
+
+    def get_nature_reels(self, status: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """Retrieve recent nature reels with parsed hashtags."""
+        import json
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if status:
+                cursor.execute(
+                    "SELECT * FROM nature_reels WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                    (status, limit),
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM nature_reels ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                )
+            rows = [dict(r) for r in cursor.fetchall()]
+            for r in rows:
+                if r.get("hashtags"):
+                    try:
+                        r["hashtags"] = json.loads(r["hashtags"])
+                    except Exception:
+                        r["hashtags"] = [t.strip() for t in str(r["hashtags"]).split(",") if t.strip()]
+                else:
+                    r["hashtags"] = []
+            return rows
+
+    def get_nature_reel_by_id(self, reel_id: int) -> Optional[Dict[str, Any]]:
+        """Retrieve single nature reel by primary key ID."""
+        import json
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM nature_reels WHERE id = ? LIMIT 1", (reel_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            res = dict(row)
+            if res.get("hashtags"):
+                try:
+                    res["hashtags"] = json.loads(res["hashtags"])
+                except Exception:
+                    res["hashtags"] = [t.strip() for t in str(res["hashtags"]).split(",") if t.strip()]
+            else:
+                res["hashtags"] = []
+            return res
+
+    def update_nature_reel_status(self, reel_id: int, status: str) -> bool:
+        """Update approval status (PENDING, APPROVED, REJECTED)."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE nature_reels SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now, reel_id),
+            )
+            return cursor.rowcount > 0
+
+    def update_nature_reel_draft(
+        self, reel_id: int, thought_text: str, caption: str, hashtags: List[str]
+    ) -> bool:
+        """Update editable thought text, caption, and hashtags before approval."""
+        import json
+
+        tags_str = json.dumps(hashtags)
+        now = datetime.now(timezone.utc).isoformat()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE nature_reels
+                SET thought_text = ?, caption = ?, hashtags = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (thought_text, caption, tags_str, now, reel_id),
+            )
+            return cursor.rowcount > 0
+
+    def update_nature_reel_drive(self, reel_id: int, file_id: str, web_link: str) -> bool:
+        """Record Google Drive upload completion on nature reel."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE nature_reels
+                SET drive_file_id = ?, drive_link = ?, uploaded_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (file_id, web_link, now, now, reel_id),
+            )
+            return cursor.rowcount > 0
+
+    def get_recent_nature_thoughts(self, limit: int = 50) -> List[str]:
+        """Fetch recent thoughts to prevent repetitive text generation."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT thought_text FROM nature_reels ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+            return [row["thought_text"] for row in cursor.fetchall() if row["thought_text"]]
+
+    def save_nature_job(self, job_data: Dict[str, Any]) -> None:
+        """Record or update active pipeline job execution status."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO nature_jobs (
+                    job_id, stage, progress, total_candidates,
+                    processed_candidates, rendered_reels, current_category,
+                    current_keyword, error_message, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    stage = excluded.stage,
+                    progress = excluded.progress,
+                    total_candidates = excluded.total_candidates,
+                    processed_candidates = excluded.processed_candidates,
+                    rendered_reels = excluded.rendered_reels,
+                    current_category = excluded.current_category,
+                    current_keyword = excluded.current_keyword,
+                    error_message = excluded.error_message,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    job_data.get("job_id"),
+                    job_data.get("stage", "IDLE"),
+                    int(job_data.get("progress", 0)),
+                    int(job_data.get("total_candidates", 0)),
+                    int(job_data.get("processed_candidates", 0)),
+                    int(job_data.get("rendered_reels", 0)),
+                    job_data.get("current_category"),
+                    job_data.get("current_keyword"),
+                    job_data.get("error_message"),
+                    now,
+                ),
+            )
+
+    def get_latest_nature_job(self) -> Optional[Dict[str, Any]]:
+        """Retrieve most recent pipeline execution state."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM nature_jobs ORDER BY created_at DESC LIMIT 1")
+            row = cursor.fetchone()
+            return dict(row) if row else None
+

@@ -9,6 +9,7 @@ import ProcessingQueue from './pages/ProcessingQueue';
 import Library from './pages/Library';
 import GoogleDrive from './pages/GoogleDrive';
 import Settings from './pages/Settings';
+import NatureReelMaker from './pages/NatureReelMaker';
 import api from './api/client';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 
@@ -72,6 +73,8 @@ export function App() {
         return <Discover onNavigate={setActivePage} showToast={showToast} />;
       case 'video-downloads':
         return <VideoDownloads onNavigate={setActivePage} showToast={showToast} />;
+      case 'nature-reels':
+        return <NatureReelMaker showToast={showToast} />;
       case 'instagram-audio':
         return <InstagramAudio onNavigate={setActivePage} showToast={showToast} />;
       case 'processing-queue':

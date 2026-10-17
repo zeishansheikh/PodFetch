@@ -1,0 +1,396 @@
+"""End-to-end processing pipeline for the Nature Cinematic Reel Maker."""
+
+from __future__ import annotations
+
+import logging
+import os
+import threading
+import time
+import uuid
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from config import AppConfig
+from database import Database
+from drive_uploader import GoogleDriveUploader
+from filters import VideoCandidate
+from logger import get_logger
+from nature.models import (
+    CompositionMode,
+    JobStage,
+    NatureCandidate,
+    NatureProfile,
+    NatureQualityScore,
+    NatureReel,
+    NatureTemplateConfig,
+    ReelStatus,
+)
+from nature.profile import ProfileManager
+from nature.quality_filter import NatureQualityFilter
+from nature.template import NatureTemplateRenderer
+from nature.thoughts_generator import NatureThoughtsGenerator
+from pinterest_discovery import PinterestDiscoverer
+from pinterest_downloader import PinterestDownloader
+
+logger = get_logger("nature_pipeline")
+
+
+class NaturePipeline:
+    """Orchestrates 15-stage workflow from keyword rotation to discovery,
+
+    quality scoring, download, AI thought generation, template rendering,
+    and Google Drive backup.
+    """
+
+    def __init__(
+        self,
+        config: Optional[AppConfig] = None,
+        db: Optional[Database] = None,
+        base_dir: Optional[Path] = None,
+    ):
+        self.config = config or AppConfig()
+        db_path = getattr(self.config, "database_path", Path("downloads.db"))
+        self.db = db or Database(db_path)
+        dl_dir = getattr(self.config, "download_dir", Path("downloads"))
+        self.base_dir = base_dir or Path(dl_dir) / "nature"
+        self.originals_dir = self.base_dir / "originals"
+        self.reels_dir = self.base_dir / "reels"
+        self.thumbnails_dir = self.base_dir / "thumbnails"
+
+        self.originals_dir.mkdir(parents=True, exist_ok=True)
+        self.reels_dir.mkdir(parents=True, exist_ok=True)
+        self.thumbnails_dir.mkdir(parents=True, exist_ok=True)
+
+        self.profile_manager = ProfileManager(self._load_or_create_profile())
+        self.quality_filter = NatureQualityFilter(self.profile_manager.profile)
+        self.template_renderer = NatureTemplateRenderer(NatureTemplateConfig())
+        self.thoughts_generator = NatureThoughtsGenerator()
+
+        # Job state tracking
+        self._stop_requested = False
+        self._current_job_id: Optional[str] = None
+        self._lock = threading.Lock()
+
+    def _load_or_create_profile(self) -> NatureProfile:
+        """Load stored profile from SQLite or create default."""
+        stored = self.db.get_nature_profile("Nature Cinematic Reels")
+        if stored:
+            return NatureProfile(
+                name=stored["name"],
+                categories=stored["categories"],
+                custom_keywords=stored["custom_keywords"],
+                excluded_terms=stored["excluded_terms"],
+                search_limit=stored["search_limit"],
+                daily_processing_limit=stored["daily_processing_limit"],
+                min_quality_score=stored["min_quality_score"],
+                is_active=stored["is_active"],
+            )
+        default_prof = NatureProfile()
+        self.db.save_nature_profile(default_prof.to_dict())
+        return default_prof
+
+    def reload_profile(self) -> NatureProfile:
+        """Refresh profile from database."""
+        prof = self._load_or_create_profile()
+        self.profile_manager = ProfileManager(prof)
+        self.quality_filter = NatureQualityFilter(prof)
+        return prof
+
+    def stop(self) -> None:
+        """Signal active pipeline job to stop."""
+        with self._lock:
+            self._stop_requested = True
+            logger.info("Pipeline stop signal sent.")
+
+    def run_pipeline(
+        self,
+        category: Optional[str] = None,
+        keyword: Optional[str] = None,
+        max_reels: int = 1,
+        composition_mode: str = CompositionMode.CROP.value,
+        force_mock_if_empty: bool = False,
+    ) -> Dict[str, Any]:
+        """Execute the automated Nature Reel pipeline."""
+        with self._lock:
+            self._stop_requested = False
+            job_id = f"job_nature_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+            self._current_job_id = job_id
+
+        logger.info(f"Starting Nature Pipeline [{job_id}]")
+        self._update_job_status(job_id, JobStage.DISCOVERING, progress=5, rendered_reels=0)
+
+        # 1. Keyword Rotation & Selection
+        if not category:
+            cat_list = self.profile_manager.profile.categories
+            category = cat_list[0] if cat_list else "mountains"
+
+        if not keyword:
+            category, keyword = self.profile_manager.get_next_keyword(category, randomize=True)
+
+        self._update_job_status(
+            job_id,
+            JobStage.DISCOVERING,
+            progress=15,
+            current_category=category,
+            current_keyword=keyword,
+        )
+
+        # 2. Pinterest Discovery
+        discovered_candidates = self._discover_candidates(category, keyword, limit=self.profile_manager.profile.search_limit)
+
+        if not discovered_candidates and force_mock_if_empty:
+            logger.warning("No online Pinterest candidates discovered; checking local cache.")
+
+        self._update_job_status(
+            job_id,
+            JobStage.FILTERING,
+            progress=30,
+            total_candidates=len(discovered_candidates),
+        )
+
+        rendered_count = 0
+        already_processed = self.db.get_all_nature_candidate_ids()
+
+        for idx, candidate in enumerate(discovered_candidates):
+            if self._stop_requested:
+                logger.info("Pipeline stopped by user.")
+                self._update_job_status(job_id, JobStage.PAUSED, progress=round((idx / max(len(discovered_candidates), 1)) * 100))
+                break
+
+            if rendered_count >= max_reels:
+                break
+
+            # 3. Deduplication and Pre-Download Check
+            if candidate.source_id in already_processed:
+                candidate.eligibility_status = "REJECTED"
+                candidate.rejection_reason = "Duplicate candidate already processed"
+                self.db.save_nature_candidate(candidate.to_dict())
+                continue
+
+            # 4. Excluded Terms Check
+            is_excluded, reason = self.profile_manager.is_title_or_desc_excluded(candidate.title)
+            if is_excluded:
+                candidate.eligibility_status = "REJECTED"
+                candidate.rejection_reason = reason
+                self.db.save_nature_candidate(candidate.to_dict())
+                continue
+
+            # 5. Download Media File
+            self._update_job_status(job_id, JobStage.DOWNLOADING, progress=45)
+            cat_dir = self.originals_dir / category
+            cat_dir.mkdir(parents=True, exist_ok=True)
+            local_filename = f"{candidate.source_id}.mp4"
+            target_download_path = cat_dir / local_filename
+
+            download_ok = self._download_candidate_media(candidate, target_download_path)
+            if not download_ok:
+                candidate.eligibility_status = "REJECTED"
+                candidate.rejection_reason = "Media download failed or source has no playable stream"
+                self.db.save_nature_candidate(candidate.to_dict())
+                continue
+
+            # 6. Deep Multi-factor Quality Inspection
+            self._update_job_status(job_id, JobStage.VALIDATING, progress=60)
+            score = self.quality_filter.evaluate_candidate(
+                candidate=candidate,
+                local_video_path=target_download_path,
+                already_processed_ids=already_processed,
+            )
+            self.db.save_nature_candidate(candidate.to_dict())
+
+            if not score.passed_gate:
+                logger.info(f"Candidate {candidate.source_id} rejected: {candidate.rejection_reason}")
+                continue
+
+            # 7. AI Poetic Thought & Caption Generation
+            self._update_job_status(job_id, JobStage.GENERATING_THOUGHTS, progress=75)
+            past_thoughts = self.db.get_recent_nature_thoughts(limit=50)
+            thought = self.thoughts_generator.generate_thought_and_caption(
+                category=category,
+                keyword=keyword,
+                past_thoughts=past_thoughts,
+                creator_attribution=candidate.creator_attribution,
+            )
+
+            # 8. Fixed Template Video Rendering
+            self._update_job_status(job_id, JobStage.RENDERING, progress=85)
+            reel_filename = f"{candidate.source_id}_nature_reel.mp4"
+            rendered_reel_path = self.reels_dir / reel_filename
+            thumb_path = self.thumbnails_dir / f"{candidate.source_id}.jpg"
+
+            render_ok, render_err = self.template_renderer.render_reel(
+                input_video_path=target_download_path,
+                thought_text=thought.thought_text,
+                output_reel_path=rendered_reel_path,
+                target_duration=10.0,
+                composition_mode=composition_mode,
+            )
+
+            if not render_ok:
+                logger.error(f"Render failed for candidate {candidate.source_id}: {render_err}")
+                candidate.eligibility_status = "REJECTED"
+                candidate.rejection_reason = f"Render error: {render_err}"
+                self.db.save_nature_candidate(candidate.to_dict())
+                continue
+
+            # Extract thumbnail
+            self.template_renderer.generate_thumbnail(rendered_reel_path, thumb_path, timestamp=1.5)
+
+            # 9. Google Drive Upload (Optional backup if configured)
+            drive_file_id = None
+            drive_link = None
+            if getattr(self.config, "drive_upload_enabled", True):
+                try:
+                    self._update_job_status(job_id, JobStage.UPLOADING, progress=92)
+                    drive_uploader = GoogleDriveUploader(self.config)
+                    # Upload rendered reel to Google Drive
+                    up_ok, drive_file_id, drive_link = drive_uploader.upload_file(
+                        file_path=rendered_reel_path,
+                        category=f"nature/{category}",
+                        description=f"Nature Cinematic Reel: {thought.thought_text}",
+                    )
+                except Exception as e:
+                    logger.warning(f"Google Drive upload skipped/failed: {e}")
+
+            # 10. Persist Rendered Reel Asset to SQLite (Status = PENDING review)
+            reel = NatureReel(
+                source_id=candidate.source_id,
+                candidate_url=candidate.canonical_url,
+                category=category,
+                keyword=keyword,
+                original_video_path=str(target_download_path),
+                rendered_reel_path=str(rendered_reel_path),
+                thumbnail_path=str(thumb_path) if thumb_path.exists() else None,
+                thought_text=thought.thought_text,
+                caption=thought.caption,
+                hashtags=thought.hashtags,
+                title_hook=thought.title_hook,
+                creator_attribution=candidate.creator_attribution,
+                template_name="Nature Cinematic — Thought Reel",
+                template_version="1.0.0",
+                composition_mode=composition_mode,
+                duration_seconds=10.0,
+                width=1080,
+                height=1920,
+                fps=30,
+                ai_model_name=thought.model_name,
+                status=ReelStatus.PENDING.value,
+                drive_file_id=drive_file_id,
+                drive_link=drive_link,
+                uploaded_at=datetime.now(timezone.utc).isoformat() if drive_file_id else None,
+            )
+            reel_id = self.db.save_nature_reel(reel.to_dict())
+            reel.id = reel_id
+            rendered_count += 1
+            already_processed.add(candidate.source_id)
+
+            logger.info(f"Nature Reel created successfully! Reel ID: {reel_id}, Path: {rendered_reel_path}")
+
+        final_stage = JobStage.COMPLETED if rendered_count > 0 else (JobStage.PAUSED if self._stop_requested else JobStage.COMPLETED)
+        self._update_job_status(
+            job_id,
+            final_stage,
+            progress=100,
+            rendered_reels=rendered_count,
+            processed_candidates=len(discovered_candidates),
+        )
+
+        return {
+            "job_id": job_id,
+            "status": final_stage.value,
+            "category": category,
+            "keyword": keyword,
+            "candidates_found": len(discovered_candidates),
+            "rendered_reels": rendered_count,
+        }
+
+    def _discover_candidates(self, category: str, keyword: str, limit: int = 15) -> List[NatureCandidate]:
+        """Discover video pins using existing PinterestDiscovery module."""
+        candidates: List[NatureCandidate] = []
+        try:
+            discoverer = PinterestDiscoverer(self.config, self.db)
+            pins = discoverer._query_resource_api(keyword, limit=limit)
+            for p in pins:
+                cand = NatureCandidate(
+                    source_id=p.pin_id,
+                    platform="pinterest",
+                    title=p.title or p.description or f"Scenic {category}",
+                    canonical_url=p.canonical_url,
+                    category=category,
+                    search_keyword=keyword,
+                    width=p.width,
+                    height=p.height,
+                    duration_seconds=float(p.duration_seconds) if p.duration_seconds else None,
+                    thumbnail_url=p.thumbnail_url,
+                    creator_attribution=p.raw_data.get("pinner", {}).get("username"),
+                    raw_metadata=p.raw_data,
+                )
+                candidates.append(cand)
+        except Exception as e:
+            logger.warning(f"Error querying Pinterest discovery: {e}")
+
+        return candidates
+
+    def _download_candidate_media(self, candidate: NatureCandidate, dest_path: Path) -> bool:
+        """Download candidate video stream to dest_path using PinterestDownloader."""
+        if dest_path.exists() and dest_path.stat().st_size > 10000:
+            return True
+
+        vc = VideoCandidate(
+            youtube_video_id=candidate.source_id,
+            channel_id=f"pinterest_{candidate.category}",
+            channel_name="Pinterest",
+            title=candidate.title,
+            youtube_url=candidate.canonical_url,
+            published_at=None,
+            duration_seconds=int(candidate.duration_seconds) if candidate.duration_seconds else None,
+            is_short=False,
+            is_live=False,
+            platform="pinterest",
+            source_id=candidate.source_id,
+            canonical_url=candidate.canonical_url,
+            search_keyword=candidate.search_keyword,
+            width=candidate.width,
+            height=candidate.height,
+            thumbnail_url=candidate.thumbnail_url,
+        )
+
+        downloader = PinterestDownloader(self.config)
+        try:
+            downloaded = downloader.download_video(vc)
+            if downloaded and Path(downloaded).exists():
+                import shutil
+                shutil.move(str(downloaded), str(dest_path))
+                return True
+        except Exception as e:
+            logger.warning(f"PinterestDownloader failed for {candidate.canonical_url}: {e}")
+
+        return False
+
+    def _update_job_status(
+        self,
+        job_id: str,
+        stage: JobStage,
+        progress: int = 0,
+        total_candidates: int = 0,
+        processed_candidates: int = 0,
+        rendered_reels: int = 0,
+        current_category: Optional[str] = None,
+        current_keyword: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Update job table in SQLite."""
+        job_data = {
+            "job_id": job_id,
+            "stage": stage.value,
+            "progress": progress,
+            "total_candidates": total_candidates,
+            "processed_candidates": processed_candidates,
+            "rendered_reels": rendered_reels,
+            "current_category": current_category,
+            "current_keyword": current_keyword,
+            "error_message": error_message,
+        }
+        self.db.save_nature_job(job_data)

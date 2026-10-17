@@ -1576,6 +1576,346 @@ def get_system_logs(lines: int = Query(80, ge=10, le=500)) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Nature Cinematic Reel Maker Endpoints
+# ---------------------------------------------------------------------------
+
+from nature.models import (
+    CompositionMode,
+    JobStage,
+    NatureCategory,
+    NatureProfile,
+    NatureReel,
+    NatureTemplateConfig,
+    ReelStatus,
+)
+from nature.pipeline import NaturePipeline
+from nature.profile import DEFAULT_EXCLUDED_TERMS, DEFAULT_NATURE_CATEGORIES, ProfileManager
+from nature.template import NatureTemplateRenderer
+from quran.key_rotator import get_key_rotator
+
+_nature_pipeline_instance: Optional[NaturePipeline] = None
+
+
+def get_nature_pipeline() -> NaturePipeline:
+    global _nature_pipeline_instance
+    if _nature_pipeline_instance is None:
+        cfg = get_config()
+        db = get_db(cfg)
+        _nature_pipeline_instance = NaturePipeline(config=cfg, db=db)
+    return _nature_pipeline_instance
+
+
+class NatureProfileUpdateRequest(BaseModel):
+    categories: Optional[List[str]] = None
+    custom_keywords: Optional[Dict[str, List[str]]] = None
+    excluded_terms: Optional[List[str]] = None
+    search_limit: Optional[int] = Field(default=15, ge=1, le=50)
+    daily_processing_limit: Optional[int] = Field(default=10, ge=1, le=100)
+    min_quality_score: Optional[float] = Field(default=65.0, ge=0.0, le=100.0)
+    is_active: Optional[bool] = True
+
+
+class NatureDraftUpdateRequest(BaseModel):
+    thought_text: str
+    caption: str
+    hashtags: List[str]
+
+
+class NatureRerenderRequest(BaseModel):
+    thought_text: Optional[str] = None
+    composition_mode: Optional[str] = "crop"
+    color_preset: Optional[str] = "restrained_warm"
+    font_path: Optional[str] = None
+    font_size: Optional[int] = 44
+
+
+class NatureRunRequest(BaseModel):
+    category: Optional[str] = None
+    keyword: Optional[str] = None
+    max_reels: int = Field(default=1, ge=1, le=5)
+    composition_mode: str = Field(default="crop")
+
+
+@app.get("/api/nature/categories")
+def get_nature_categories() -> Dict[str, Any]:
+    """Get predefined and active nature categories with keyword variations."""
+    pipe = get_nature_pipeline()
+    cats = pipe.profile_manager.get_categories()
+    return {
+        "categories": [
+            {
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "keywords": c.keywords,
+            }
+            for c in cats.values()
+        ]
+    }
+
+
+@app.get("/api/nature/profile")
+def get_nature_profile_endpoint() -> Dict[str, Any]:
+    """Get the active Nature Cinematic Reels profile and AI status without exposing secrets."""
+    pipe = get_nature_pipeline()
+    prof = pipe.profile_manager.profile
+    rotator = get_key_rotator()
+
+    # Redacted AI key status
+    active_keys_count = len(rotator._keys)
+    masked_key = (
+        f"{rotator.get_current_key()[:8]}...{rotator.get_current_key()[-4:]}"
+        if rotator.has_keys
+        else None
+    )
+
+    return {
+        "profile": prof.to_dict(),
+        "ai_status": {
+            "has_groq_key": rotator.has_keys,
+            "active_keys_count": active_keys_count,
+            "masked_key": masked_key,
+            "provider": "groq" if rotator.has_keys else "curated_library",
+            "model": "openai/gpt-oss-20b" if rotator.has_keys else "curated-fallback-engine",
+        },
+        "default_categories": [
+            {
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "keywords": c.keywords,
+            }
+            for c in DEFAULT_NATURE_CATEGORIES.values()
+        ],
+    }
+
+
+@app.put("/api/nature/profile")
+def update_nature_profile_endpoint(req: NatureProfileUpdateRequest) -> Dict[str, Any]:
+    """Update Nature profile settings in SQLite."""
+    pipe = get_nature_pipeline()
+    prof = pipe.profile_manager.profile
+
+    if req.categories is not None:
+        prof.categories = req.categories
+    if req.custom_keywords is not None:
+        prof.custom_keywords = req.custom_keywords
+    if req.excluded_terms is not None:
+        prof.excluded_terms = req.excluded_terms
+    if req.search_limit is not None:
+        prof.search_limit = req.search_limit
+    if req.daily_processing_limit is not None:
+        prof.daily_processing_limit = req.daily_processing_limit
+    if req.min_quality_score is not None:
+        prof.min_quality_score = req.min_quality_score
+    if req.is_active is not None:
+        prof.is_active = req.is_active
+
+    prof.updated_at = datetime.now(timezone.utc).isoformat()
+    pipe.db.save_nature_profile(prof.to_dict())
+    pipe.reload_profile()
+
+    return {"status": "success", "profile": prof.to_dict()}
+
+
+@app.get("/api/nature/candidates")
+def get_nature_candidates_endpoint(
+    category: Optional[str] = None, limit: int = Query(50, ge=1, le=100)
+) -> Dict[str, Any]:
+    """Get discovered nature footage candidates and quality scores."""
+    pipe = get_nature_pipeline()
+    candidates = pipe.db.get_nature_candidates(category=category, limit=limit)
+    return {"candidates": candidates, "total": len(candidates)}
+
+
+@app.get("/api/nature/reels")
+def get_nature_reels_endpoint(
+    status: Optional[str] = None, limit: int = Query(50, ge=1, le=100)
+) -> Dict[str, Any]:
+    """Get nature reels (PENDING review, APPROVED, or REJECTED)."""
+    pipe = get_nature_pipeline()
+    reels = pipe.db.get_nature_reels(status=status, limit=limit)
+    return {"reels": reels, "total": len(reels)}
+
+
+@app.get("/api/nature/reels/{reel_id}")
+def get_single_nature_reel(reel_id: int) -> Dict[str, Any]:
+    """Get single nature reel by ID."""
+    pipe = get_nature_pipeline()
+    reel = pipe.db.get_nature_reel_by_id(reel_id)
+    if not reel:
+        raise HTTPException(status_code=404, detail=f"Reel ID {reel_id} not found")
+    return {"reel": reel}
+
+
+@app.put("/api/nature/reels/{reel_id}/draft")
+def update_nature_reel_draft_endpoint(
+    reel_id: int, req: NatureDraftUpdateRequest
+) -> Dict[str, Any]:
+    """Update editable thought text, caption, and hashtags before approval."""
+    pipe = get_nature_pipeline()
+    reel = pipe.db.get_nature_reel_by_id(reel_id)
+    if not reel:
+        raise HTTPException(status_code=404, detail=f"Reel ID {reel_id} not found")
+
+    ok = pipe.db.update_nature_reel_draft(
+        reel_id=reel_id,
+        thought_text=req.thought_text,
+        caption=req.caption,
+        hashtags=req.hashtags,
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to update reel draft")
+
+    updated = pipe.db.get_nature_reel_by_id(reel_id)
+    return {"status": "success", "reel": updated}
+
+
+@app.post("/api/nature/reels/{reel_id}/approve")
+def approve_nature_reel_endpoint(reel_id: int) -> Dict[str, Any]:
+    """Mark a reel as APPROVED for publishing."""
+    pipe = get_nature_pipeline()
+    reel = pipe.db.get_nature_reel_by_id(reel_id)
+    if not reel:
+        raise HTTPException(status_code=404, detail=f"Reel ID {reel_id} not found")
+
+    pipe.db.update_nature_reel_status(reel_id, ReelStatus.APPROVED.value)
+    return {"status": "success", "reel_id": reel_id, "reel_status": ReelStatus.APPROVED.value}
+
+
+@app.post("/api/nature/reels/{reel_id}/reject")
+def reject_nature_reel_endpoint(reel_id: int) -> Dict[str, Any]:
+    """Mark a reel as REJECTED."""
+    pipe = get_nature_pipeline()
+    reel = pipe.db.get_nature_reel_by_id(reel_id)
+    if not reel:
+        raise HTTPException(status_code=404, detail=f"Reel ID {reel_id} not found")
+
+    pipe.db.update_nature_reel_status(reel_id, ReelStatus.REJECTED.value)
+    return {"status": "success", "reel_id": reel_id, "reel_status": ReelStatus.REJECTED.value}
+
+
+@app.post("/api/nature/reels/{reel_id}/rerender")
+def rerender_nature_reel_endpoint(
+    reel_id: int, req: NatureRerenderRequest, background_tasks: BackgroundTasks
+) -> Dict[str, Any]:
+    """Re-render an existing reel with updated thought text, composition mode, or style."""
+    pipe = get_nature_pipeline()
+    reel = pipe.db.get_nature_reel_by_id(reel_id)
+    if not reel:
+        raise HTTPException(status_code=404, detail=f"Reel ID {reel_id} not found")
+
+    orig_path = reel.get("original_video_path")
+    out_path = reel.get("rendered_reel_path")
+    if not orig_path or not Path(orig_path).exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Original source video not found on disk at {orig_path}",
+        )
+
+    text_to_render = req.thought_text or reel.get("thought_text")
+
+    def _do_rerender():
+        renderer = NatureTemplateRenderer()
+        ok, err = renderer.render_reel(
+            input_video_path=orig_path,
+            thought_text=text_to_render,
+            output_reel_path=out_path,
+            target_duration=float(reel.get("duration_seconds", 10.0)),
+            composition_mode=req.composition_mode or reel.get("composition_mode", "crop"),
+            color_preset=req.color_preset or "restrained_warm",
+            font_path=req.font_path,
+            font_size=req.font_size,
+        )
+        if ok and reel.get("thumbnail_path"):
+            renderer.generate_thumbnail(out_path, reel["thumbnail_path"], timestamp=1.5)
+
+    background_tasks.add_task(_do_rerender)
+    return {
+        "status": "rerendering_started",
+        "reel_id": reel_id,
+        "composition_mode": req.composition_mode,
+    }
+
+
+@app.post("/api/nature/pipeline/run")
+def run_nature_pipeline_endpoint(
+    req: NatureRunRequest, background_tasks: BackgroundTasks
+) -> Dict[str, Any]:
+    """Trigger the Nature Cinematic Reel pipeline in the background."""
+    pipe = get_nature_pipeline()
+
+    def _run_task():
+        try:
+            pipe.run_pipeline(
+                category=req.category,
+                keyword=req.keyword,
+                max_reels=req.max_reels,
+                composition_mode=req.composition_mode,
+            )
+        except Exception as e:
+            logger.error(f"Nature pipeline background execution error: {e}")
+
+    background_tasks.add_task(_run_task)
+    return {
+        "status": "started",
+        "category": req.category or "automatic_rotation",
+        "keyword": req.keyword or "automatic_rotation",
+        "max_reels": req.max_reels,
+        "composition_mode": req.composition_mode,
+    }
+
+
+@app.post("/api/nature/pipeline/stop")
+def stop_nature_pipeline_endpoint() -> Dict[str, Any]:
+    """Signal active Nature pipeline run to stop."""
+    pipe = get_nature_pipeline()
+    pipe.stop()
+    return {"status": "stop_requested"}
+
+
+@app.get("/api/nature/status")
+def get_nature_status_endpoint() -> Dict[str, Any]:
+    """Get active pipeline job status, progress, and reel counts."""
+    pipe = get_nature_pipeline()
+    latest_job = pipe.db.get_latest_nature_job()
+    pending = pipe.db.get_nature_reels(status=ReelStatus.PENDING.value, limit=1)
+    approved = pipe.db.get_nature_reels(status=ReelStatus.APPROVED.value, limit=1)
+    rejected = pipe.db.get_nature_reels(status=ReelStatus.REJECTED.value, limit=1)
+
+    return {
+        "latest_job": latest_job,
+        "counts": {
+            "pending_review": len(pipe.db.get_nature_reels(status=ReelStatus.PENDING.value, limit=500)),
+            "approved": len(pipe.db.get_nature_reels(status=ReelStatus.APPROVED.value, limit=500)),
+            "rejected": len(pipe.db.get_nature_reels(status=ReelStatus.REJECTED.value, limit=500)),
+        },
+    }
+
+
+@app.get("/api/nature/media/{file_path:path}")
+def serve_nature_media(file_path: str):
+    """Safely stream rendered reels and thumbnails to dashboard."""
+    # Prevent directory traversal
+    resolved_path = (Path(file_path)).resolve()
+    base_dir = (Path("downloads")).resolve()
+
+    if not str(resolved_path).startswith(str(base_dir)):
+        # Check if relative to downloads
+        alt_path = (base_dir / file_path).resolve()
+        if not str(alt_path).startswith(str(base_dir)) or not alt_path.exists():
+            raise HTTPException(status_code=403, detail="Access denied")
+        resolved_path = alt_path
+
+    if not resolved_path.exists() or not resolved_path.is_file():
+        raise HTTPException(status_code=404, detail="Media file not found")
+
+    content_type = "video/mp4" if resolved_path.suffix.lower() == ".mp4" else "image/jpeg"
+    return FileResponse(resolved_path, media_type=content_type)
+
+
+
+# ---------------------------------------------------------------------------
 # Static Frontend Serving (Vite SPA)
 # ---------------------------------------------------------------------------
 

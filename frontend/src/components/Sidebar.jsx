@@ -11,12 +11,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Radio,
+  Sparkles,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'discover', label: 'Discover', icon: Compass },
   { id: 'video-downloads', label: 'Video Downloads', icon: Video },
+  { id: 'nature-reels', label: 'Nature Reel Maker', icon: Sparkles },
   { id: 'instagram-audio', label: 'Instagram Audio', icon: Music2 },
   { id: 'processing-queue', label: 'Processing Queue', icon: ListOrdered },
   { id: 'library', label: 'Media Library', icon: FolderArchive },
