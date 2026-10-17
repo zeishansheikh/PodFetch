@@ -142,6 +142,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getNatureCategories: () => request('/nature/categories'),
+  getNatureTemplates: () => request('/nature/templates'),
   getNatureCandidates: (params = {}) => {
     const query = new URLSearchParams();
     if (params.category) query.append('category', params.category);

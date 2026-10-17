@@ -27,6 +27,8 @@ from nature.models import (
     NatureReel,
     NatureTemplateConfig,
     ReelStatus,
+    TEMPLATE_MINIMAL_WHITE_SERIF,
+    TEMPLATE_THOUGHT_REEL,
 )
 from nature.profile import ProfileManager
 from nature.quality_filter import NatureQualityFilter
@@ -112,6 +114,14 @@ class NaturePipeline:
         max_reels: int = 1,
         composition_mode: str = CompositionMode.CROP.value,
         force_mock_if_empty: bool = False,
+        template_name: Optional[str] = None,
+        custom_thought: Optional[str] = None,
+        target_duration: Optional[float] = None,
+        font_size: Optional[int] = None,
+        line_spacing: Optional[int] = None,
+        music_path: Optional[str] = None,
+        music_volume: Optional[float] = None,
+        source_audio_volume: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Execute the automated Nature Reel pipeline."""
         with self._lock:
@@ -138,16 +148,39 @@ class NaturePipeline:
             "waterfalls": "forests_waterfalls",
             "meadows": "flowers_meadows",
             "flowers": "flowers_meadows",
+            "rolling_hills": "rolling_hills_countryside",
+            "rolling_hills_countryside": "rolling_hills_countryside",
+            "countryside": "rolling_hills_countryside",
+            "hills": "rolling_hills_countryside",
         }
         if category and category.lower() in CATEGORY_ALIASES:
             category = CATEGORY_ALIASES[category.lower()]
 
         if not category:
             cat_list = self.profile_manager.profile.categories
-            category = cat_list[0] if cat_list else "mountains"
+            category = cat_list[0] if cat_list else "rolling_hills_countryside"
 
         if not keyword:
             category, keyword = self.profile_manager.get_next_keyword(category, randomize=True)
+
+        # Template configuration
+        chosen_template = template_name or TEMPLATE_MINIMAL_WHITE_SERIF
+        template_cfg = NatureTemplateConfig.from_preset(chosen_template)
+        template_cfg.composition_mode = composition_mode
+        if font_size:
+            template_cfg.font_size = font_size
+        if line_spacing is not None:
+            template_cfg.line_spacing = line_spacing
+        if target_duration:
+            template_cfg.target_duration = target_duration
+        if music_path:
+            template_cfg.music_path = music_path
+        if music_volume is not None:
+            template_cfg.music_volume = music_volume
+        if source_audio_volume is not None:
+            template_cfg.source_audio_volume = source_audio_volume
+
+        eff_duration = target_duration or template_cfg.target_duration
 
         self._update_job_status(
             job_id,
@@ -234,7 +267,9 @@ class NaturePipeline:
                 creator_attribution=candidate.creator_attribution,
             )
 
-            # 8. Fixed Template Video Rendering
+            eff_thought_text = custom_thought.strip() if (custom_thought and custom_thought.strip()) else thought.thought_text
+
+            # 8. Template Video Rendering
             self._update_job_status(job_id, JobStage.RENDERING, progress=85)
             reel_filename = f"{candidate.source_id}_nature_reel.mp4"
             rendered_reel_path = self.reels_dir / reel_filename
@@ -242,10 +277,11 @@ class NaturePipeline:
 
             render_ok, render_err = self.template_renderer.render_reel(
                 input_video_path=target_download_path,
-                thought_text=thought.thought_text,
+                thought_text=eff_thought_text,
                 output_reel_path=rendered_reel_path,
-                target_duration=10.0,
+                target_duration=eff_duration,
                 composition_mode=composition_mode,
+                template_config=template_cfg,
             )
 
             if not render_ok:
@@ -268,7 +304,7 @@ class NaturePipeline:
                     drive_file_id, drive_link = drive_uploader.upload_file(
                         file_path=rendered_reel_path,
                         platform=f"nature_{category}",
-                        description=f"Nature Cinematic Reel: {thought.thought_text}",
+                        description=f"Nature Cinematic Reel: {eff_thought_text}",
                     )
                 except Exception as e:
                     logger.warning(f"Google Drive upload skipped/failed: {e}")
@@ -282,19 +318,19 @@ class NaturePipeline:
                 original_video_path=str(target_download_path),
                 rendered_reel_path=str(rendered_reel_path),
                 thumbnail_path=str(thumb_path) if thumb_path.exists() else None,
-                thought_text=thought.thought_text,
+                thought_text=eff_thought_text,
                 caption=thought.caption,
                 hashtags=thought.hashtags,
                 title_hook=thought.title_hook,
                 creator_attribution=candidate.creator_attribution,
-                template_name="Nature Cinematic — Thought Reel",
-                template_version="1.0.0",
+                template_name=chosen_template,
+                template_version="2.0.0",
                 composition_mode=composition_mode,
-                duration_seconds=10.0,
+                duration_seconds=eff_duration,
                 width=1080,
                 height=1920,
                 fps=30,
-                ai_model_name=thought.model_name,
+                ai_model_name=thought.model_name if not custom_thought else "User-Edited",
                 status=ReelStatus.PENDING.value,
                 drive_file_id=drive_file_id,
                 drive_link=drive_link,

@@ -37,6 +37,7 @@ export function NatureReelMaker({ showToast }) {
   const [profile, setProfile] = useState(null);
   const [aiStatus, setAiStatus] = useState(null);
   const [categories, setCategories] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [pipelineStatus, setPipelineStatus] = useState(null);
 
   const [loading, setLoading] = useState(false);
@@ -48,22 +49,31 @@ export function NatureReelMaker({ showToast }) {
   const [rerenderingReel, setRerenderingReel] = useState(null);
   const [runModalOpen, setRunModalOpen] = useState(false);
 
+  // Template & preview states
+  const [selectedTemplatePreset, setSelectedTemplatePreset] = useState('Nature Cinematic — Minimal White Serif Quote');
+
   // Run pipeline parameters
   const [runCategory, setRunCategory] = useState('');
   const [runKeyword, setRunKeyword] = useState('');
   const [runMaxReels, setRunMaxReels] = useState(1);
   const [runComposition, setRunComposition] = useState('crop');
+  const [runTemplate, setRunTemplate] = useState('Nature Cinematic — Minimal White Serif Quote');
+  const [runCustomThought, setRunCustomThought] = useState('');
+  const [runDuration, setRunDuration] = useState(12);
+  const [runFontSize, setRunFontSize] = useState(44);
+  const [runLineSpacing, setRunLineSpacing] = useState(24);
 
   // Load profile & initial data
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [profData, catData, reelsData, candData, statusData] = await Promise.all([
+      const [profData, catData, reelsData, candData, statusData, tplData] = await Promise.all([
         api.getNatureProfile().catch(() => null),
         api.getNatureCategories().catch(() => ({ categories: [] })),
         api.getNatureReels({ limit: 50 }).catch(() => ({ reels: [] })),
         api.getNatureCandidates({ limit: 50 }).catch(() => ({ candidates: [] })),
         api.getNatureStatus().catch(() => null),
+        api.getNatureTemplates().catch(() => ({ templates: [] })),
       ]);
 
       if (profData) {
@@ -71,6 +81,7 @@ export function NatureReelMaker({ showToast }) {
         setAiStatus(profData.ai_status);
       }
       if (catData) setCategories(catData.categories || []);
+      if (tplData && tplData.templates) setTemplates(tplData.templates || []);
       if (reelsData) setReels(reelsData.reels || []);
       if (candData) setCandidates(candData.candidates || []);
       if (statusData) {
@@ -122,6 +133,11 @@ export function NatureReelMaker({ showToast }) {
         keyword: runKeyword || null,
         max_reels: parseInt(runMaxReels, 10) || 1,
         composition_mode: runComposition,
+        template_name: runTemplate || 'Nature Cinematic — Minimal White Serif Quote',
+        custom_thought: runCustomThought.trim() ? runCustomThought.trim() : null,
+        target_duration: parseFloat(runDuration) || 12.0,
+        font_size: parseInt(runFontSize, 10) || 44,
+        line_spacing: parseInt(runLineSpacing, 10) || 24,
       });
       if (showToast) showToast('Nature Cinematic Reel pipeline started.', 'success');
       fetchData();
@@ -186,9 +202,13 @@ export function NatureReelMaker({ showToast }) {
     try {
       await api.rerenderNatureReel(rerenderingReel.id, {
         thought_text: rerenderingReel.thought_text,
-        composition_mode: rerenderingReel.composition_mode,
+        template_name: rerenderingReel.template_name || 'Nature Cinematic — Minimal White Serif Quote',
+        composition_mode: rerenderingReel.composition_mode || 'crop',
         color_preset: rerenderingReel.color_preset || 'restrained_warm',
-        font_size: rerenderingReel.font_size || 44,
+        font_size: parseInt(rerenderingReel.font_size, 10) || 44,
+        line_spacing: parseInt(rerenderingReel.line_spacing, 10) || 24,
+        target_duration: parseFloat(rerenderingReel.duration_seconds) || 12.0,
+        shadow_strength: parseFloat(rerenderingReel.shadow_strength) || 0.65,
       });
       if (showToast) showToast('Rerendering started in background.', 'info');
       setRerenderingReel(null);
@@ -359,6 +379,61 @@ export function NatureReelMaker({ showToast }) {
       {/* TAB 1: REELS REVIEW & APPROVAL */}
       {activeTab === 'review' && (
         <div>
+          {/* Template Style Selector & Aesthetic Showcase */}
+          <div className="card" style={{ padding: '16px 20px', marginBottom: '24px', background: 'linear-gradient(135deg, rgba(24, 24, 27, 0.95), rgba(9, 9, 11, 0.95))', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: 'rgba(34, 197, 94, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#22c55e' }}>
+                  <Type size={22} />
+                </div>
+                <div>
+                  <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', fontWeight: '600' }}>Active Aesthetic Preset</div>
+                  <div style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-main)' }}>{selectedTemplatePreset}</div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <select
+                  className="form-select"
+                  style={{ minWidth: '320px', padding: '8px 12px', fontSize: '13px', background: 'var(--bg-surface)' }}
+                  value={selectedTemplatePreset}
+                  onChange={(e) => {
+                    setSelectedTemplatePreset(e.target.value);
+                    setRunTemplate(e.target.value);
+                  }}
+                >
+                  {templates.length > 0 ? (
+                    templates.map((t) => (
+                      <option key={t.id} value={t.name}>{t.name}</option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="Nature Cinematic — Minimal White Serif Quote">Nature Cinematic — Minimal White Serif Quote</option>
+                      <option value="Nature Cinematic — Thought Reel">Nature Cinematic — Thought Reel</option>
+                    </>
+                  )}
+                </select>
+
+                <button
+                  className="btn btn-primary"
+                  onClick={() => setRunModalOpen(true)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <Play size={15} /> Launch Reel Maker
+                </button>
+              </div>
+            </div>
+
+            {/* Visual Style Highlights */}
+            <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexWrap: 'wrap', gap: '20px', fontSize: '12px', color: 'var(--text-muted)' }}>
+              <span>✦ <strong>Typography:</strong> Elegant White Serif (Noto / Liberation)</span>
+              <span>✦ <strong>Arrangement:</strong> 4–7 readable lines, centered horizontally</span>
+              <span>✦ <strong>Contrast:</strong> Soft dark shadow (no box scrim or stickers)</span>
+              <span>✦ <strong>Framing:</strong> 1080×1920 9:16 Full-bleed nature footage</span>
+              <span>✦ <strong>Pacing:</strong> 10–15s calm fade-in/fade-out</span>
+            </div>
+          </div>
+
           {reels.length === 0 ? (
             <div className="card" style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-muted)' }}>
               <Film size={48} style={{ margin: '0 auto 16px', opacity: 0.4 }} />
@@ -397,7 +472,7 @@ export function NatureReelMaker({ showToast }) {
                     <div
                       style={{
                         position: 'relative',
-                        height: '220px',
+                        height: '240px',
                         background: '#18181b',
                         display: 'flex',
                         alignItems: 'center',
@@ -419,27 +494,27 @@ export function NatureReelMaker({ showToast }) {
                         <Film size={40} style={{ color: '#71717a' }} />
                       )}
 
-                      {/* On-screen text overlay preview */}
+                      {/* On-screen text overlay preview with exact white serif styling */}
                       <div
                         style={{
                           position: 'absolute',
                           inset: 0,
-                          background: 'rgba(0, 0, 0, 0.4)',
+                          background: 'rgba(0, 0, 0, 0.25)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          padding: '16px',
+                          padding: '20px 16px',
                           textAlign: 'center',
                         }}
                       >
                         <p
                           style={{
                             color: '#ffffff',
-                            fontFamily: 'serif',
-                            fontSize: '15px',
-                            fontStyle: 'italic',
-                            textShadow: '0 2px 4px rgba(0,0,0,0.8)',
-                            lineHeight: 1.4,
+                            fontFamily: 'Georgia, serif',
+                            fontSize: '14px',
+                            fontWeight: '400',
+                            textShadow: '0 2px 4px rgba(0,0,0,0.85)',
+                            lineHeight: 1.45,
                             whiteSpace: 'pre-line',
                             margin: 0,
                           }}
@@ -447,7 +522,6 @@ export function NatureReelMaker({ showToast }) {
                           "{reel.thought_text}"
                         </p>
                       </div>
-
                       {/* Play Icon Badge */}
                       <div
                         style={{
@@ -494,12 +568,43 @@ export function NatureReelMaker({ showToast }) {
                     <div style={{ padding: '16px', flex: 1, display: 'flex', flexDirection: 'column', gap: '10px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--accent-primary)', textTransform: 'capitalize' }}>
-                          {reel.category.replace('_', ' ')}
+                          {reel.category.replace(/_/g, ' ')}
                         </span>
                         <span style={{ fontSize: '11px', color: 'var(--text-disabled)' }}>
                           {reel.duration_seconds}s • 1080×1920
                         </span>
                       </div>
+
+                      {/* Template Name badge */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                        <Tag size={12} />
+                        <span>{reel.template_name || 'Minimal White Serif'}</span>
+                      </div>
+
+                      {/* Source Pin link */}
+                      {reel.candidate_url && (
+                        <div style={{ fontSize: '11px' }}>
+                          <a
+                            href={reel.candidate_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: 'var(--accent-primary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            title={reel.candidate_url}
+                          >
+                            <ExternalLink size={12} /> View Source Video
+                          </a>
+                        </div>
+                      )}
+
+                      {/* Local File Path */}
+                      {reel.rendered_reel_path && (
+                        <div style={{ fontSize: '11px', color: 'var(--text-disabled)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Film size={11} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={reel.rendered_reel_path}>
+                            {reel.rendered_reel_path}
+                          </span>
+                        </div>
+                      )}
 
                       {/* Caption Draft */}
                       <div>
@@ -874,18 +979,48 @@ export function NatureReelMaker({ showToast }) {
       {/* MODAL: RUN PIPELINE */}
       {runModalOpen && (
         <div className="mobile-overlay visible" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="card" style={{ width: '480px', maxWidth: '90%', padding: '24px', borderRadius: 'var(--radius-lg)' }}>
+          <div className="card" style={{ width: '560px', maxWidth: '95%', maxHeight: '90vh', overflowY: 'auto', padding: '24px', borderRadius: 'var(--radius-lg)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>Launch Nature Reel Pipeline</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Sparkles size={20} style={{ color: '#22c55e' }} />
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>Launch Nature Reel Pipeline</h3>
+              </div>
               <button onClick={() => setRunModalOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
                 <XCircle size={20} />
               </button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Template Preset Selector */}
               <div>
                 <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '6px' }}>
-                  Target Category (Optional Override)
+                  Template Preset
+                </label>
+                <select
+                  className="form-select"
+                  style={{ width: '100%', padding: '8px' }}
+                  value={runTemplate}
+                  onChange={(e) => {
+                    setRunTemplate(e.target.value);
+                    setSelectedTemplatePreset(e.target.value);
+                  }}
+                >
+                  <option value="Nature Cinematic — Minimal White Serif Quote">
+                    Nature Cinematic — Minimal White Serif Quote (Recommended)
+                  </option>
+                  <option value="Nature Cinematic — Thought Reel">
+                    Nature Cinematic — Thought Reel (With Dark Scrim)
+                  </option>
+                </select>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
+                  Matches reference video: 1080×1920 full-frame footage, centered white serif typography, soft drop-shadow, no boxes.
+                </span>
+              </div>
+
+              {/* Target Category */}
+              <div>
+                <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '6px' }}>
+                  Footage Category
                 </label>
                 <select
                   className="form-select"
@@ -902,20 +1037,91 @@ export function NatureReelMaker({ showToast }) {
                 </select>
               </div>
 
+              {/* Pre-render Thought Editing */}
               <div>
-                <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '6px' }}>
-                  Composition Mode
-                </label>
-                <select
-                  className="form-select"
-                  style={{ width: '100%', padding: '8px' }}
-                  value={runComposition}
-                  onChange={(e) => setRunComposition(e.target.value)}
-                >
-                  <option value="crop">Crop (Center Fill to 9:16)</option>
-                  <option value="blurred-background">Blurred Background (Landscape centered over blur)</option>
-                  <option value="fit-with-background">Fit with Background (Clean letterbox bars)</option>
-                </select>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <label style={{ fontWeight: '600', fontSize: '13px' }}>
+                    Custom Thought Text (Optional 4–7 Lines)
+                  </label>
+                  <span style={{ fontSize: '11px', color: 'var(--accent-primary)', cursor: 'pointer' }}
+                    onClick={() => setRunCustomThought("With every passing day,\nthe heart learns softness:\nLet the sun go down.\nRelease what was heavy.\nTomorrow is waiting,\nunwritten and clear.")}>
+                    Insert Sample Thought
+                  </span>
+                </div>
+                <textarea
+                  rows={4}
+                  className="form-input"
+                  style={{ width: '100%', fontFamily: 'Georgia, serif', fontSize: '13px', padding: '8px', lineHeight: 1.5 }}
+                  placeholder="Leave empty for Groq AI to generate original poetic reflection, or write 4–7 short lines here..."
+                  value={runCustomThought}
+                  onChange={(e) => setRunCustomThought(e.target.value)}
+                />
+              </div>
+
+              {/* Framing & Duration Row */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '6px' }}>
+                    Video Crop Strategy
+                  </label>
+                  <select
+                    className="form-select"
+                    style={{ width: '100%', padding: '8px' }}
+                    value={runComposition}
+                    onChange={(e) => setRunComposition(e.target.value)}
+                  >
+                    <option value="crop">Full-Frame Crop (Clean 9:16)</option>
+                    <option value="blurred-background">Blurred Background</option>
+                    <option value="fit-with-background">Fit with Black Bars</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '6px' }}>
+                    Target Duration
+                  </label>
+                  <select
+                    className="form-select"
+                    style={{ width: '100%', padding: '8px' }}
+                    value={runDuration}
+                    onChange={(e) => setRunDuration(parseFloat(e.target.value))}
+                  >
+                    <option value="10">10 seconds (Short & sweet)</option>
+                    <option value="12">12 seconds (Reference match)</option>
+                    <option value="15">15 seconds (Calm reading)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Typography Settings */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                    Font Size ({runFontSize}px)
+                  </label>
+                  <input
+                    type="range"
+                    min="36"
+                    max="52"
+                    value={runFontSize}
+                    onChange={(e) => setRunFontSize(parseInt(e.target.value, 10))}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                    Line Spacing ({runLineSpacing}px)
+                  </label>
+                  <input
+                    type="range"
+                    min="16"
+                    max="36"
+                    value={runLineSpacing}
+                    onChange={(e) => setRunLineSpacing(parseInt(e.target.value, 10))}
+                    style={{ width: '100%' }}
+                  />
+                </div>
               </div>
 
               <div>
@@ -949,18 +1155,21 @@ export function NatureReelMaker({ showToast }) {
       {/* MODAL: VIDEO PLAYER PREVIEW */}
       {selectedReel && (
         <div className="mobile-overlay visible" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="card" style={{ width: '420px', maxWidth: '90%', padding: '20px', borderRadius: 'var(--radius-lg)', background: '#09090b', color: '#ffffff' }}>
+          <div className="card" style={{ width: '460px', maxWidth: '95%', maxHeight: '92vh', overflowY: 'auto', padding: '20px', borderRadius: 'var(--radius-lg)', background: '#09090b', color: '#ffffff', border: '1px solid rgba(255,255,255,0.12)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <span style={{ fontSize: '14px', fontWeight: '600', color: '#a1a1aa' }}>
-                {selectedReel.template_name}
-              </span>
-              <button onClick={() => setSelectedReel(null)} style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Film size={16} style={{ color: '#22c55e' }} />
+                <span style={{ fontSize: '14px', fontWeight: '700', color: '#f4f4f5' }}>
+                  {selectedReel.template_name || 'Nature Cinematic — Minimal White Serif Quote'}
+                </span>
+              </div>
+              <button onClick={() => setSelectedReel(null)} style={{ background: 'none', border: 'none', color: '#a1a1aa', cursor: 'pointer' }}>
                 <XCircle size={20} />
               </button>
             </div>
 
             {/* 9:16 Video Player */}
-            <div style={{ width: '100%', aspectRatio: '9/16', background: '#000000', borderRadius: '8px', overflow: 'hidden' }}>
+            <div style={{ width: '100%', aspectRatio: '9/16', background: '#000000', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,0.6)' }}>
               <video
                 src={`/api/nature/media/${selectedReel.rendered_reel_path}`}
                 controls
@@ -970,13 +1179,81 @@ export function NatureReelMaker({ showToast }) {
               />
             </div>
 
-            <div style={{ marginTop: '14px', fontSize: '13px' }}>
-              <p style={{ margin: '0 0 4px', fontStyle: 'italic', fontFamily: 'serif', fontSize: '15px' }}>
-                "{selectedReel.thought_text}"
-              </p>
-              <p style={{ margin: '8px 0 0', color: '#a1a1aa', fontSize: '12px' }}>
-                {selectedReel.caption}
-              </p>
+            {/* Video Specs & Details */}
+            <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', fontSize: '11px' }}>
+                <span style={{ padding: '3px 8px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: '#e4e4e7' }}>
+                  1080 × 1920 (9:16)
+                </span>
+                <span style={{ padding: '3px 8px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: '#e4e4e7' }}>
+                  30 FPS • H.264
+                </span>
+                <span style={{ padding: '3px 8px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: '#e4e4e7' }}>
+                  {selectedReel.duration_seconds}s Duration
+                </span>
+                <span style={{ padding: '3px 8px', borderRadius: '4px', background: 'rgba(34, 197, 94, 0.15)', color: '#22c55e', textTransform: 'uppercase', fontWeight: '700' }}>
+                  {selectedReel.status}
+                </span>
+              </div>
+
+              {/* On-screen thought */}
+              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.04)', borderRadius: '8px' }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#a1a1aa', marginBottom: '4px' }}>
+                  On-Screen Reflection
+                </div>
+                <p style={{ margin: 0, fontStyle: 'italic', fontFamily: 'Georgia, serif', fontSize: '14px', lineHeight: 1.5, whiteSpace: 'pre-line', color: '#ffffff' }}>
+                  "{selectedReel.thought_text}"
+                </p>
+              </div>
+
+              {/* Social Caption */}
+              <div>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#a1a1aa', marginBottom: '2px' }}>
+                  Social Caption
+                </div>
+                <p style={{ margin: 0, color: '#d4d4d8', fontSize: '12px', lineHeight: 1.4 }}>
+                  {selectedReel.caption}
+                </p>
+              </div>
+
+              {/* Source Pin link */}
+              {selectedReel.candidate_url && (
+                <div style={{ fontSize: '12px' }}>
+                  <a
+                    href={selectedReel.candidate_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#60a5fa', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <ExternalLink size={13} /> Original Pinterest Source URL
+                  </a>
+                </div>
+              )}
+
+              {/* Output Path */}
+              {selectedReel.rendered_reel_path && (
+                <div style={{ fontSize: '11px', color: '#71717a', wordBreak: 'break-all' }}>
+                  <strong>Output File:</strong> {selectedReel.rendered_reel_path}
+                </div>
+              )}
+
+              {/* Modal Actions */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    const r = selectedReel;
+                    setSelectedReel(null);
+                    setRerenderingReel(r);
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <RotateCcw size={14} /> Re-render Style
+                </button>
+                <button className="btn btn-secondary btn-sm" onClick={() => setSelectedReel(null)}>
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -999,9 +1276,9 @@ export function NatureReelMaker({ showToast }) {
                   On-Screen Thought Text (Appears on video)
                 </label>
                 <textarea
-                  rows={2}
+                  rows={4}
                   className="form-input"
-                  style={{ width: '100%', fontFamily: 'serif', fontSize: '15px', padding: '8px' }}
+                  style={{ width: '100%', fontFamily: 'Georgia, serif', fontSize: '14px', padding: '8px', lineHeight: 1.5 }}
                   value={editingDraft.thought_text}
                   onChange={(e) => setEditingDraft({ ...editingDraft, thought_text: e.target.value })}
                 />
@@ -1052,29 +1329,112 @@ export function NatureReelMaker({ showToast }) {
       {/* MODAL: RERENDER REEL */}
       {rerenderingReel && (
         <div className="mobile-overlay visible" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="card" style={{ width: '480px', maxWidth: '90%', padding: '24px', borderRadius: 'var(--radius-lg)' }}>
+          <div className="card" style={{ width: '520px', maxWidth: '95%', maxHeight: '90vh', overflowY: 'auto', padding: '24px', borderRadius: 'var(--radius-lg)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>Re-render Nature Reel</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <RotateCcw size={18} style={{ color: 'var(--accent-primary)' }} />
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>Re-render Nature Reel</h3>
+              </div>
               <button onClick={() => setRerenderingReel(null)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
                 <XCircle size={20} />
               </button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {/* Template Preset Selector */}
               <div>
                 <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '4px' }}>
-                  Composition Framing Mode
+                  Template Preset
                 </label>
                 <select
                   className="form-select"
                   style={{ width: '100%', padding: '8px' }}
-                  value={rerenderingReel.composition_mode}
-                  onChange={(e) => setRerenderingReel({ ...rerenderingReel, composition_mode: e.target.value })}
+                  value={rerenderingReel.template_name || 'Nature Cinematic — Minimal White Serif Quote'}
+                  onChange={(e) => setRerenderingReel({ ...rerenderingReel, template_name: e.target.value })}
                 >
-                  <option value="crop">Crop (Center Fill to 9:16)</option>
-                  <option value="blurred-background">Blurred Background</option>
-                  <option value="fit-with-background">Fit with Background (Black Bars)</option>
+                  <option value="Nature Cinematic — Minimal White Serif Quote">Nature Cinematic — Minimal White Serif Quote</option>
+                  <option value="Nature Cinematic — Thought Reel">Nature Cinematic — Thought Reel</option>
                 </select>
+              </div>
+
+              {/* Thought Text */}
+              <div>
+                <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '4px' }}>
+                  On-Screen Thought Text (4–7 Lines)
+                </label>
+                <textarea
+                  rows={4}
+                  className="form-input"
+                  style={{ width: '100%', fontFamily: 'Georgia, serif', fontSize: '14px', padding: '8px', lineHeight: 1.5 }}
+                  value={rerenderingReel.thought_text || ''}
+                  onChange={(e) => setRerenderingReel({ ...rerenderingReel, thought_text: e.target.value })}
+                />
+              </div>
+
+              {/* Composition Mode & Duration */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '4px' }}>
+                    Crop Strategy
+                  </label>
+                  <select
+                    className="form-select"
+                    style={{ width: '100%', padding: '8px' }}
+                    value={rerenderingReel.composition_mode || 'crop'}
+                    onChange={(e) => setRerenderingReel({ ...rerenderingReel, composition_mode: e.target.value })}
+                  >
+                    <option value="crop">Full-Frame Crop (9:16)</option>
+                    <option value="blurred-background">Blurred Background</option>
+                    <option value="fit-with-background">Black Bars</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '4px' }}>
+                    Duration
+                  </label>
+                  <select
+                    className="form-select"
+                    style={{ width: '100%', padding: '8px' }}
+                    value={rerenderingReel.duration_seconds || 12}
+                    onChange={(e) => setRerenderingReel({ ...rerenderingReel, duration_seconds: parseFloat(e.target.value) })}
+                  >
+                    <option value="10">10 seconds</option>
+                    <option value="12">12 seconds</option>
+                    <option value="15">15 seconds</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Typography Sliders */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                    Font Size ({rerenderingReel.font_size || 44}px)
+                  </label>
+                  <input
+                    type="range"
+                    min="36"
+                    max="54"
+                    value={rerenderingReel.font_size || 44}
+                    onChange={(e) => setRerenderingReel({ ...rerenderingReel, font_size: parseInt(e.target.value, 10) })}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                    Line Spacing ({rerenderingReel.line_spacing || 24}px)
+                  </label>
+                  <input
+                    type="range"
+                    min="16"
+                    max="36"
+                    value={rerenderingReel.line_spacing || 24}
+                    onChange={(e) => setRerenderingReel({ ...rerenderingReel, line_spacing: parseInt(e.target.value, 10) })}
+                    style={{ width: '100%' }}
+                  />
+                </div>
               </div>
 
               <div>
@@ -1092,20 +1452,6 @@ export function NatureReelMaker({ showToast }) {
                   <option value="cool_mist">Cool Mist (Subtle Nordic Slate)</option>
                   <option value="none">None (Passthrough Original Colors)</option>
                 </select>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '4px' }}>
-                  Font Size ({rerenderingReel.font_size || 44}px)
-                </label>
-                <input
-                  type="range"
-                  min="36"
-                  max="56"
-                  value={rerenderingReel.font_size || 44}
-                  onChange={(e) => setRerenderingReel({ ...rerenderingReel, font_size: parseInt(e.target.value, 10) })}
-                  style={{ width: '100%' }}
-                />
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>

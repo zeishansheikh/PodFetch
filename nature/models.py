@@ -52,6 +52,7 @@ class NatureProfile:
     name: str = "Nature Cinematic Reels"
     categories: List[str] = field(
         default_factory=lambda: [
+            "rolling_hills_countryside",
             "mountains",
             "lakes_rivers",
             "sunsets_sunrises",
@@ -143,26 +144,70 @@ class NatureCandidate:
         return data
 
 
+TEMPLATE_MINIMAL_WHITE_SERIF = "Nature Cinematic — Minimal White Serif Quote"
+TEMPLATE_THOUGHT_REEL = "Nature Cinematic — Thought Reel"
+
+
 @dataclass
 class NatureTemplateConfig:
-    """Settings for the Nature Cinematic — Thought Reel template."""
+    """Settings for Nature Cinematic Reel rendering templates."""
 
-    name: str = "Nature Cinematic — Thought Reel"
-    template_version: str = "1.0.0"
+    name: str = TEMPLATE_MINIMAL_WHITE_SERIF
+    template_version: str = "1.1.0"
     composition_mode: str = CompositionMode.CROP.value
     canvas_width: int = 1080
     canvas_height: int = 1920
-    target_duration: float = 10.0
+    target_duration: float = 12.0
     fps: int = 30
     font_path: str = "/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf"
     font_style: str = "serif"  # 'serif' or 'serif-italic'
     font_size: int = 44
-    text_position_y: str = "(h-text_h)/2 + 80"
+    line_spacing: int = 24
+    max_lines: int = 7
+    text_position_y: str = "(h-text_h)/2 + 100"
     letterbox_bars: bool = False
     color_grade_preset: str = "restrained_warm"
+    color_grading_intensity: float = 1.0
     fade_duration: float = 0.6
     enable_shadow: bool = True
-    enable_scrim: bool = True
+    shadow_strength: float = 0.65
+    shadow_offset: int = 2
+    enable_scrim: bool = False  # Reference style has clean composition without dark box
+    source_audio_volume: float = 1.0
+    music_path: Optional[str] = None
+    music_volume: float = 0.4
+    show_attribution: bool = False
+    attribution_text: Optional[str] = None
+    attribution_position_y: str = "(h-text_h)/2 - 120"
+
+    @classmethod
+    def from_preset(cls, preset_name: str) -> NatureTemplateConfig:
+        """Instantiate template config from preset name."""
+        if preset_name == TEMPLATE_THOUGHT_REEL:
+            return cls(
+                name=TEMPLATE_THOUGHT_REEL,
+                font_size=44,
+                line_spacing=20,
+                max_lines=5,
+                text_position_y="(h-text_h)/2 + 80",
+                enable_shadow=True,
+                shadow_strength=0.8,
+                enable_scrim=True,
+                target_duration=10.0,
+            )
+        # Default to Nature Cinematic — Minimal White Serif Quote
+        return cls(
+            name=TEMPLATE_MINIMAL_WHITE_SERIF,
+            font_size=44,
+            line_spacing=24,
+            max_lines=7,
+            text_position_y="(h-text_h)/2 + 100",
+            enable_shadow=True,
+            shadow_strength=0.65,
+            shadow_offset=2,
+            enable_scrim=False,
+            target_duration=12.0,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -205,10 +250,10 @@ class NatureReel:
     hashtags: List[str] = field(default_factory=list)
     title_hook: Optional[str] = None
     creator_attribution: Optional[str] = None
-    template_name: str = "Nature Cinematic — Thought Reel"
-    template_version: str = "1.0.0"
+    template_name: str = TEMPLATE_MINIMAL_WHITE_SERIF
+    template_version: str = "1.1.0"
     composition_mode: str = CompositionMode.CROP.value
-    duration_seconds: float = 10.0
+    duration_seconds: float = 12.0
     width: int = 1080
     height: int = 1920
     fps: int = 30

@@ -8,11 +8,26 @@ from nature.models import NatureCategory, NatureProfile
 
 # Canonical default categories with the required exact keywords
 DEFAULT_NATURE_CATEGORIES: Dict[str, NatureCategory] = {
+    "rolling_hills_countryside": NatureCategory(
+        id="rolling_hills_countryside",
+        name="Rolling Hills & Countryside",
+        description="Lush green rolling hills, aerial countryside landscapes, and golden hour slopes",
+        keywords=[
+            "cinematic rolling green hills",
+            "aerial countryside scenery",
+            "rolling green hills landscape",
+            "peaceful green hills landscape",
+            "green hills aesthetic video",
+            "golden hour rolling hills",
+            "dreamy countryside scenery",
+        ],
+    ),
     "mountains": NatureCategory(
         id="mountains",
         name="Mountains",
         description="Alpine peaks, misty valleys, and cinematic mountain vistas",
         keywords=[
+            "peaceful mountains and valleys",
             "cinematic mountain landscape",
             "dreamy alpine mountains",
             "mountain clouds aesthetic",
@@ -25,6 +40,7 @@ DEFAULT_NATURE_CATEGORIES: Dict[str, NatureCategory] = {
         name="Lakes and Rivers",
         description="Crystal clear alpine lakes, reflections, and peaceful flowing streams",
         keywords=[
+            "peaceful rivers and lakes",
             "cinematic alpine lake",
             "mountain lake reflection",
             "peaceful flowing river",
@@ -37,6 +53,8 @@ DEFAULT_NATURE_CATEGORIES: Dict[str, NatureCategory] = {
         name="Sunsets and Sunrises",
         description="Warm golden hour landscapes, twilight skies, and glowing horizons",
         keywords=[
+            "golden-hour landscapes",
+            "sunset and sunrise landscapes",
             "cinematic golden hour landscape",
             "dreamy sunset clouds",
             "sunset over mountains",
@@ -49,6 +67,7 @@ DEFAULT_NATURE_CATEGORIES: Dict[str, NatureCategory] = {
         name="Forests and Waterfalls",
         description="Misty evergreen forests, cascading waterfalls, and lush woodland paths",
         keywords=[
+            "forests, rivers and waterfalls",
             "misty evergreen forest",
             "cinematic waterfall scenery",
             "forest river aesthetic",
@@ -61,6 +80,7 @@ DEFAULT_NATURE_CATEGORIES: Dict[str, NatureCategory] = {
         name="Flowers and Meadows",
         description="Wildflower meadows, blooming alpine fields, and gentle spring scenery",
         keywords=[
+            "meadows and flowers moving in the wind",
             "wildflower meadow cinematic",
             "flowers in golden sunlight",
             "dreamy spring landscape",

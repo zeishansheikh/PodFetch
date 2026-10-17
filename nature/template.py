@@ -35,23 +35,53 @@ class NatureTemplateRenderer:
                     self.config.font_path = f
                     break
 
-    def format_thought_text(self, text: str, max_width: int = 34) -> str:
+    def format_thought_text(self, text: str, max_width: int = 34, max_lines: Optional[int] = None) -> str:
         """Format thought into graceful, readable lines for vertical 9:16 reels."""
         if not text:
             return ""
-        # Strip outer quotes if already present
         clean = text.strip().strip('"').strip("'")
-        lines = textwrap.wrap(clean, width=max_width)
-        return "\n".join(lines)
+        effective_max_lines = max_lines or self.config.max_lines
 
-    def _get_color_grade_filter(self, preset: str) -> str:
+        # If text has explicit line breaks, preserve them and only wrap lines that exceed max_width
+        if "\n" in clean:
+            raw_lines = [l.strip() for l in clean.split("\n") if l.strip()]
+            wrapped = []
+            for line in raw_lines:
+                if len(line) > max_width:
+                    wrapped.extend(textwrap.wrap(line, width=max_width))
+                else:
+                    wrapped.append(line)
+        else:
+            wrapped = textwrap.wrap(clean, width=max_width)
+
+        if effective_max_lines and len(wrapped) > effective_max_lines:
+            wrapped = wrapped[:effective_max_lines]
+
+        return "\n".join(wrapped)
+
+    def _get_color_grade_filter(self, preset: str, intensity: float = 1.0) -> str:
         """Return FFmpeg video filter for subtle, restrained cinematic grading."""
+        if intensity <= 0.0 or preset == "none":
+            return "null"
         if preset == "restrained_warm":
-            return "eq=contrast=1.04:saturation=1.08:brightness=0.01"
+            c = 1.0 + 0.04 * intensity
+            s = 1.0 + 0.08 * intensity
+            b = 0.01 * intensity
+            return f"eq=contrast={c:.2f}:saturation={s:.2f}:brightness={b:.2f}"
         elif preset == "golden_hour":
-            return "eq=contrast=1.06:saturation=1.14,colorbalance=rs=0.04:gs=0.01:bs=-0.03"
+            c = 1.0 + 0.06 * intensity
+            s = 1.0 + 0.14 * intensity
+            rs = 0.04 * intensity
+            gs = 0.01 * intensity
+            bs = -0.03 * intensity
+            return f"eq=contrast={c:.2f}:saturation={s:.2f},colorbalance=rs={rs:.2f}:gs={gs:.2f}:bs={bs:.2f}"
         elif preset == "cool_mist":
-            return "eq=contrast=1.03:saturation=0.96:brightness=0.02,colorbalance=bs=0.03:gs=0.01"
+            c = 1.0 + 0.03 * intensity
+            s = 1.0 - 0.04 * intensity
+            b = 0.02 * intensity
+            bs = 0.03 * intensity
+            gs = 0.01 * intensity
+            return f"eq=contrast={c:.2f}:saturation={s:.2f}:brightness={b:.2f},colorbalance=bs={bs:.2f}:gs={gs:.2f}"
         return "null"
 
     def build_filter_complex(
@@ -61,8 +91,14 @@ class NatureTemplateRenderer:
         fade_duration: float = 0.6,
         composition_mode: str = CompositionMode.CROP.value,
         color_preset: str = "restrained_warm",
-        enable_scrim: bool = True,
+        color_intensity: float = 1.0,
+        enable_scrim: bool = False,
         letterbox_bars: bool = False,
+        font_size: Optional[int] = None,
+        line_spacing: Optional[int] = None,
+        shadow_strength: Optional[float] = None,
+        shadow_offset: Optional[int] = None,
+        attribution_text: Optional[str] = None,
     ) -> str:
         """Construct the FFmpeg filter_complex string."""
         filters = []
@@ -95,12 +131,12 @@ class NatureTemplateRenderer:
             current_tag = "[base]"
 
         # 2. Color grading
-        color_filter = self._get_color_grade_filter(color_preset)
+        color_filter = self._get_color_grade_filter(color_preset, intensity=color_intensity)
         if color_filter != "null":
             filters.append(f"{current_tag}{color_filter}[graded]")
             current_tag = "[graded]"
 
-        # 3. Text-safe subtle scrim (semi-transparent dark band for readability over bright clouds/snow)
+        # 3. Text-safe subtle scrim (only if enabled)
         if enable_scrim:
             scrim_filter = "drawbox=y=(h-380)/2+80:w=iw:h=380:color=black@0.32:t=fill"
             filters.append(f"{current_tag}{scrim_filter}[scrim]")
@@ -114,22 +150,38 @@ class NatureTemplateRenderer:
         font_path_escaped = self.config.font_path.replace(":", "\\:")
         text_file_escaped = text_file_path.replace(":", "\\:")
 
+        eff_font_size = font_size or self.config.font_size
+        eff_line_spacing = line_spacing if line_spacing is not None else self.config.line_spacing
+        eff_shadow_strength = shadow_strength if shadow_strength is not None else self.config.shadow_strength
+        eff_shadow_offset = shadow_offset if shadow_offset is not None else self.config.shadow_offset
+
         drawtext_params = [
             f"fontfile='{font_path_escaped}'",
             f"textfile='{text_file_escaped}'",
-            f"fontsize={self.config.font_size}",
+            f"fontsize={eff_font_size}",
             "fontcolor=white",
             "x=(w-text_w)/2",
             f"y={self.config.text_position_y}",
-            "line_spacing=20",
-            "shadowcolor=black@0.80",
-            "shadowx=2",
-            "shadowy=2",
+            f"line_spacing={eff_line_spacing}",
+            f"shadowcolor=black@{eff_shadow_strength:.2f}",
+            f"shadowx={eff_shadow_offset}",
+            f"shadowy={eff_shadow_offset}",
             f"alpha='{alpha_expr}'",
         ]
         text_filter = f"drawtext={':'.join(drawtext_params)}"
         filters.append(f"{current_tag}{text_filter}[vtext]")
         current_tag = "[vtext]"
+
+        # Optional creator attribution
+        if attribution_text and self.config.show_attribution:
+            attr_escaped = attribution_text.replace(":", "\\:").replace("'", "\\'")
+            attr_filter = (
+                f"drawtext=fontfile='{font_path_escaped}':text='{attr_escaped}':"
+                f"fontsize=24:fontcolor=white@0.60:x=(w-text_w)/2:y=h-140:"
+                f"shadowcolor=black@0.5:shadowx=1:shadowy=1:alpha='{alpha_expr}'"
+            )
+            filters.append(f"{current_tag}{attr_filter}[vattr]")
+            current_tag = "[vattr]"
 
         # 5. Gentle video fade in and fade out
         fade_in = f"fade=t=in:st=0:d={fade_duration}"
@@ -137,6 +189,26 @@ class NatureTemplateRenderer:
         filters.append(f"{current_tag}{fade_in},{fade_out}[vout]")
 
         return ";".join(filters)
+
+    def _has_audio_stream(self, video_path: Path) -> bool:
+        """Check if video file has at least one audio stream."""
+        try:
+            cmd = [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+                str(video_path),
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+            return "audio" in res.stdout
+        except Exception:
+            return False
 
     def render_reel(
         self,
@@ -146,13 +218,24 @@ class NatureTemplateRenderer:
         target_duration: Optional[float] = None,
         composition_mode: Optional[str] = None,
         color_preset: Optional[str] = None,
+        color_intensity: Optional[float] = None,
         font_path: Optional[str] = None,
         font_size: Optional[int] = None,
+        line_spacing: Optional[int] = None,
+        shadow_strength: Optional[float] = None,
+        source_audio_volume: Optional[float] = None,
+        music_path: Optional[str | Path] = None,
+        music_volume: Optional[float] = None,
+        enable_scrim: Optional[bool] = None,
+        template_config: Optional[NatureTemplateConfig] = None,
     ) -> Tuple[bool, Optional[str]]:
         """Render the complete nature reel to output_reel_path.
 
         Validates output media file upon completion.
         """
+        if template_config:
+            self.config = template_config
+
         input_path = Path(input_video_path)
         if not input_path.exists():
             return False, f"Input video file does not exist: {input_video_path}"
@@ -162,14 +245,31 @@ class NatureTemplateRenderer:
 
         mode = composition_mode or self.config.composition_mode
         color = color_preset or self.config.color_grade_preset
+        intensity = color_intensity if color_intensity is not None else self.config.color_grading_intensity
         duration = target_duration or self.config.target_duration
+        scrim = enable_scrim if enable_scrim is not None else self.config.enable_scrim
+
+        src_vol = source_audio_volume if source_audio_volume is not None else self.config.source_audio_volume
+        bg_music = music_path or self.config.music_path
+        bg_music_vol = music_volume if music_volume is not None else self.config.music_volume
 
         if font_path and Path(font_path).exists():
             self.config.font_path = font_path
         if font_size:
             self.config.font_size = font_size
+        if line_spacing is not None:
+            self.config.line_spacing = line_spacing
+        if shadow_strength is not None:
+            self.config.shadow_strength = shadow_strength
 
-        formatted_text = self.format_thought_text(thought_text)
+        # Dynamic font scaling if text is long (6+ lines)
+        formatted_text = self.format_thought_text(thought_text, max_lines=self.config.max_lines)
+        line_count = len(formatted_text.split("\n"))
+        effective_font_size = self.config.font_size
+        if line_count >= 7:
+            effective_font_size = min(effective_font_size, 42)
+        elif line_count >= 5:
+            effective_font_size = min(effective_font_size, 46)
 
         # Write formatted text to temporary file
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as tf:
@@ -177,15 +277,25 @@ class NatureTemplateRenderer:
             text_file_path = tf.name
 
         try:
-            filter_complex = self.build_filter_complex(
+            video_filter_complex = self.build_filter_complex(
                 text_file_path=text_file_path,
                 duration=duration,
                 fade_duration=self.config.fade_duration,
                 composition_mode=mode,
                 color_preset=color,
-                enable_scrim=self.config.enable_scrim,
+                color_intensity=intensity,
+                enable_scrim=scrim,
                 letterbox_bars=self.config.letterbox_bars,
+                font_size=effective_font_size,
+                line_spacing=self.config.line_spacing,
+                shadow_strength=self.config.shadow_strength,
+                shadow_offset=self.config.shadow_offset,
+                attribution_text=self.config.attribution_text if self.config.show_attribution else None,
             )
+
+            # Determine audio streams and mixing
+            has_source_audio = self._has_audio_stream(input_path)
+            has_bg_music = bg_music and Path(bg_music).exists()
 
             cmd = [
                 "ffmpeg",
@@ -196,12 +306,45 @@ class NatureTemplateRenderer:
                 str(duration),
                 "-i",
                 str(input_path),
+            ]
+
+            filter_chains = [video_filter_complex]
+            audio_map = []
+
+            if has_bg_music:
+                cmd.extend(["-stream_loop", "-1", "-t", str(duration), "-i", str(bg_music)])
+                if has_source_audio:
+                    audio_filter = (
+                        f"[0:a]volume={src_vol:.2f}[a0];"
+                        f"[1:a]volume={bg_music_vol:.2f}[a1];"
+                        f"[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+                    )
+                    filter_chains.append(audio_filter)
+                    audio_map = ["-map", "[aout]"]
+                else:
+                    audio_filter = f"[1:a]volume={bg_music_vol:.2f}[aout]"
+                    filter_chains.append(audio_filter)
+                    audio_map = ["-map", "[aout]"]
+            elif has_source_audio:
+                if abs(src_vol - 1.0) > 0.01:
+                    audio_filter = f"[0:a]volume={src_vol:.2f}[aout]"
+                    filter_chains.append(audio_filter)
+                    audio_map = ["-map", "[aout]"]
+                else:
+                    audio_map = ["-map", "0:a"]
+            else:
+                audio_map = ["-map", "0:a?"]
+
+            combined_filters = ";".join(filter_chains)
+
+            cmd.extend([
                 "-filter_complex",
-                filter_complex,
+                combined_filters,
                 "-map",
                 "[vout]",
-                "-map",
-                "0:a?",
+            ])
+            cmd.extend(audio_map)
+            cmd.extend([
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -218,7 +361,7 @@ class NatureTemplateRenderer:
                 "192k",
                 "-shortest",
                 str(out_path),
-            ]
+            ])
 
             logger.info(f"Rendering Nature Reel: {out_path.name} (mode: {mode})")
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)

@@ -1587,10 +1587,12 @@ from nature.models import (
     NatureReel,
     NatureTemplateConfig,
     ReelStatus,
+    TEMPLATE_MINIMAL_WHITE_SERIF,
+    TEMPLATE_THOUGHT_REEL,
 )
 from nature.pipeline import NaturePipeline
 from nature.profile import DEFAULT_EXCLUDED_TERMS, DEFAULT_NATURE_CATEGORIES, ProfileManager
-from nature.template import NatureTemplateRenderer
+from nature.template import AVAILABLE_FONTS, NatureTemplateRenderer
 from quran.key_rotator import get_key_rotator
 
 _nature_pipeline_instance: Optional[NaturePipeline] = None
@@ -1623,10 +1625,18 @@ class NatureDraftUpdateRequest(BaseModel):
 
 class NatureRerenderRequest(BaseModel):
     thought_text: Optional[str] = None
+    template_name: Optional[str] = None
     composition_mode: Optional[str] = "crop"
     color_preset: Optional[str] = "restrained_warm"
+    color_intensity: Optional[float] = 1.0
     font_path: Optional[str] = None
     font_size: Optional[int] = 44
+    line_spacing: Optional[int] = 24
+    shadow_strength: Optional[float] = 0.65
+    target_duration: Optional[float] = None
+    source_audio_volume: Optional[float] = 1.0
+    music_path: Optional[str] = None
+    music_volume: Optional[float] = 0.4
 
 
 class NatureRunRequest(BaseModel):
@@ -1634,6 +1644,14 @@ class NatureRunRequest(BaseModel):
     keyword: Optional[str] = None
     max_reels: int = Field(default=1, ge=1, le=5)
     composition_mode: str = Field(default="crop")
+    template_name: Optional[str] = None
+    custom_thought: Optional[str] = None
+    target_duration: Optional[float] = Field(default=12.0, ge=5.0, le=30.0)
+    font_size: Optional[int] = Field(default=44, ge=24, le=72)
+    line_spacing: Optional[int] = Field(default=24, ge=10, le=60)
+    music_path: Optional[str] = None
+    music_volume: Optional[float] = Field(default=0.4, ge=0.0, le=2.0)
+    source_audio_volume: Optional[float] = Field(default=1.0, ge=0.0, le=2.0)
 
 
 @app.get("/api/nature/categories")
@@ -1795,6 +1813,40 @@ def reject_nature_reel_endpoint(reel_id: int) -> Dict[str, Any]:
     return {"status": "success", "reel_id": reel_id, "reel_status": ReelStatus.REJECTED.value}
 
 
+@app.get("/api/nature/templates")
+def get_nature_templates_endpoint() -> Dict[str, Any]:
+    """Return available template presets and system fonts for Nature Reels."""
+    return {
+        "templates": [
+            {
+                "id": TEMPLATE_MINIMAL_WHITE_SERIF,
+                "name": TEMPLATE_MINIMAL_WHITE_SERIF,
+                "description": "Full-screen nature footage with elegant white serif typography, soft drop shadow, centered middle-to-lower-middle, 4-7 lines, and calm pacing.",
+                "default_font_size": 44,
+                "default_line_spacing": 24,
+                "default_composition": "crop",
+                "default_shadow_strength": 0.65,
+                "default_duration": 12.0,
+                "enable_scrim": False,
+            },
+            {
+                "id": TEMPLATE_THOUGHT_REEL,
+                "name": TEMPLATE_THOUGHT_REEL,
+                "description": "Cinematic nature reel with semi-transparent contrast scrim band and warm color grading.",
+                "default_font_size": 44,
+                "default_line_spacing": 20,
+                "default_composition": "crop",
+                "default_shadow_strength": 0.80,
+                "default_duration": 10.0,
+                "enable_scrim": True,
+            },
+        ],
+        "available_fonts": [
+            {"path": f, "name": Path(f).stem} for f in AVAILABLE_FONTS if Path(f).exists()
+        ],
+    }
+
+
 @app.post("/api/nature/reels/{reel_id}/rerender")
 def rerender_nature_reel_endpoint(
     reel_id: int, req: NatureRerenderRequest, background_tasks: BackgroundTasks
@@ -1816,19 +1868,55 @@ def rerender_nature_reel_endpoint(
     text_to_render = req.thought_text or reel.get("thought_text")
 
     def _do_rerender():
-        renderer = NatureTemplateRenderer()
+        tpl_name = req.template_name or reel.get("template_name") or TEMPLATE_MINIMAL_WHITE_SERIF
+        tpl_cfg = NatureTemplateConfig.from_preset(tpl_name)
+        comp_mode = req.composition_mode or reel.get("composition_mode", "crop")
+        tpl_cfg.composition_mode = comp_mode
+
+        if req.font_size:
+            tpl_cfg.font_size = req.font_size
+        if req.line_spacing is not None:
+            tpl_cfg.line_spacing = req.line_spacing
+        if req.shadow_strength is not None:
+            tpl_cfg.shadow_strength = req.shadow_strength
+        if req.color_intensity is not None:
+            tpl_cfg.color_grading_intensity = req.color_intensity
+        if req.color_preset:
+            tpl_cfg.color_grade_preset = req.color_preset
+        if req.font_path:
+            tpl_cfg.font_path = req.font_path
+        if req.music_path:
+            tpl_cfg.music_path = req.music_path
+        if req.music_volume is not None:
+            tpl_cfg.music_volume = req.music_volume
+        if req.source_audio_volume is not None:
+            tpl_cfg.source_audio_volume = req.source_audio_volume
+
+        dur = req.target_duration or float(reel.get("duration_seconds", 12.0))
+
+        renderer = NatureTemplateRenderer(config=tpl_cfg)
         ok, err = renderer.render_reel(
             input_video_path=orig_path,
             thought_text=text_to_render,
             output_reel_path=out_path,
-            target_duration=float(reel.get("duration_seconds", 10.0)),
-            composition_mode=req.composition_mode or reel.get("composition_mode", "crop"),
-            color_preset=req.color_preset or "restrained_warm",
-            font_path=req.font_path,
-            font_size=req.font_size,
+            target_duration=dur,
+            composition_mode=comp_mode,
+            template_config=tpl_cfg,
         )
-        if ok and reel.get("thumbnail_path"):
-            renderer.generate_thumbnail(out_path, reel["thumbnail_path"], timestamp=1.5)
+        if ok:
+            if reel.get("thumbnail_path"):
+                renderer.generate_thumbnail(out_path, reel["thumbnail_path"], timestamp=1.5)
+            # Update SQLite record
+            pipe.db.save_nature_reel({
+                **reel,
+                "thought_text": text_to_render,
+                "template_name": tpl_name,
+                "composition_mode": comp_mode,
+                "duration_seconds": dur,
+            })
+            logger.info(f"Re-render succeeded for reel {reel_id}")
+        else:
+            logger.error(f"Re-render failed for reel {reel_id}: {err}")
 
     background_tasks.add_task(_do_rerender)
     return {
@@ -1852,6 +1940,14 @@ def run_nature_pipeline_endpoint(
                 keyword=req.keyword,
                 max_reels=req.max_reels,
                 composition_mode=req.composition_mode,
+                template_name=req.template_name,
+                custom_thought=req.custom_thought,
+                target_duration=req.target_duration,
+                font_size=req.font_size,
+                line_spacing=req.line_spacing,
+                music_path=req.music_path,
+                music_volume=req.music_volume,
+                source_audio_volume=req.source_audio_volume,
             )
         except Exception as e:
             logger.error(f"Nature pipeline background execution error: {e}")
@@ -1863,6 +1959,7 @@ def run_nature_pipeline_endpoint(
         "keyword": req.keyword or "automatic_rotation",
         "max_reels": req.max_reels,
         "composition_mode": req.composition_mode,
+        "template_name": req.template_name or TEMPLATE_MINIMAL_WHITE_SERIF,
     }
 
 

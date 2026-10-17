@@ -19,51 +19,65 @@ GROQ_CHAT_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 DEFAULT_AI_MODEL = "openai/gpt-oss-20b"
 FALLBACK_AI_MODEL = "openai/gpt-oss-120b"
 
-# High-quality deterministic fallback thoughts by category
+# High-quality deterministic fallback thoughts by category (4-7 line philosophical reflections)
 CURATED_FALLBACK_THOUGHTS: Dict[str, List[Dict[str, Any]]] = {
+    "rolling_hills_countryside": [
+        {
+            "thought": "The older you get,\nthe simpler life becomes:\nQuiet morning air.\nRolling green hills.\nPeace in your own skin.\nAnd nowhere you need to rush.",
+            "caption": "Simplicity is the truest luxury. Give yourself time to breathe and stand where the wind is quiet.",
+            "hashtags": ["#countrysidewalks", "#rollinggreenhills", "#simplelife", "#peaceandcalm"],
+            "theme": "growing_older_and_gaining_perspective",
+        },
+        {
+            "thought": "As the years move on,\nyou learn what truly matters:\nGentle mornings.\nUnspoken understanding.\nTime spent in the wild.\nAnd a quiet, grateful heart.",
+            "caption": "Life softens when we stop chasing noise. Finding peace across open fields and sunlit slopes.",
+            "hashtags": ["#gentleliving", "#naturetherapy", "#countrysidelife", "#innerpeace"],
+            "theme": "gratitude_and_happiness",
+        },
+        {
+            "thought": "The hills do not compete,\nyet they carry the sky.\nLeave behind the hurry.\nBreathe in the stillness,\nand let today be enough.",
+            "caption": "There is nothing to prove to the wind. Let today unfold at its own steady pace.",
+            "hashtags": ["#calmmind", "#scenicviews", "#slowdown", "#naturelovers"],
+            "theme": "peace_and_simplicity",
+        },
+    ],
     "mountains": [
         {
-            "thought": "Give yourself time to grow\nin places nobody sees.",
+            "thought": "In the silence of the peaks,\nwisdom comes slowly:\nClimb without comparison.\nRest without guilt.\nStand tall through the storm.\nAnd cherish every quiet view.",
             "caption": "Quiet elevation. Allow yourself the grace to find strength at your own steady pace.",
             "hashtags": ["#mountainviews", "#cinematicnature", "#peaceandquiet", "#solitude"],
             "theme": "growth_and_patience",
         },
         {
-            "thought": "The highest peaks\nare climbed with the quietest steps.",
+            "thought": "The greatest journey\nis not to conquer summits,\nbut to find stillness\nin the middle of the climb.",
             "caption": "Standing among giants. Every meaningful journey is built from quiet, steady persistence.",
             "hashtags": ["#alpinelife", "#mountaintherapy", "#natureescape", "#clarity"],
             "theme": "hope_and_resilience",
         },
-        {
-            "thought": "Silence is not empty.\nIt is full of answers.",
-            "caption": "Finding stillness high above the noise of daily life.",
-            "hashtags": ["#mountainsunrise", "#quietmoments", "#naturevibes", "#mindfulness"],
-            "theme": "peace_and_solitude",
-        },
     ],
     "lakes_rivers": [
         {
-            "thought": "Like water, find your way\naround the rocks without fighting them.",
+            "thought": "Like water finding the sea,\nlife teaches one truth:\nDo not force what is meant to flow.\nStillness brings clarity.\nAnd peace is a choice\nyou make every day.",
             "caption": "Still waters and gentle currents. Let go of what resists and flow naturally.",
             "hashtags": ["#lakeview", "#peacefulriver", "#naturecinematics", "#stillness"],
-            "theme": "letting_go_and_moving_forward",
+            "theme": "life_lessons_and_letting_go",
         },
         {
-            "thought": "Calm waters reflect\nthe clearest sky.",
+            "thought": "Calm waters reflect\nthe clearest sky.\nWhen the heart settles,\nthe path ahead\nbecomes simple again.",
             "caption": "When the mind becomes still, the world around us regains its natural beauty.",
             "hashtags": ["#alpinelake", "#reflectionshot", "#purenature", "#innercalm"],
-            "theme": "peace_and_solitude",
+            "theme": "peace_and_simplicity",
         },
     ],
     "sunsets_sunrises": [
         {
-            "thought": "Every sunset is proof\nthat endings can be beautiful too.",
+            "thought": "With every passing day,\nthe heart learns softness:\nLet the sun go down.\nRelease what was heavy.\nTomorrow is waiting,\nunwritten and clear.",
             "caption": "Golden light fading into twilight. Tomorrow begins with fresh promise.",
             "hashtags": ["#goldenhour", "#sunsetlandscape", "#eveningglow", "#gratitude"],
-            "theme": "finding_beauty_in_ordinary_moments",
+            "theme": "quiet_moments_and_appreciating_the_present",
         },
         {
-            "thought": "Light returns gently,\nnever asking for permission.",
+            "thought": "Light returns gently,\nnever asking for permission.\nEvery dawn is an invitation\nto begin again\nwith softer hands\nand a lighter heart.",
             "caption": "A new horizon. Start today without carrying yesterday's weight.",
             "hashtags": ["#sunrisemagic", "#dawnpatrol", "#naturefilm", "#freshstart"],
             "theme": "hope_and_resilience",
@@ -71,13 +85,13 @@ CURATED_FALLBACK_THOUGHTS: Dict[str, List[Dict[str, Any]]] = {
     ],
     "forests_waterfalls": [
         {
-            "thought": "The forest breathes softly\nfor those patient enough to listen.",
+            "thought": "Walk gently beneath the pines.\nNature does not argue with time.\nIt grows in patience.\nIt heals in silence.\nAnd so can you.",
             "caption": "Lost in the emerald canopy. Nature never rushes, yet everything is accomplished.",
             "hashtags": ["#forestmagic", "#waterfallphotography", "#greenery", "#serenity"],
-            "theme": "nature_and_freedom",
+            "theme": "nature_and_healing",
         },
         {
-            "thought": "Roots grow deep in silence\nbefore branches reach the sky.",
+            "thought": "Roots grow deep in silence\nbefore branches reach the sky.\nTrust the quiet seasons.\nNothing in nature blooms\nall year long.",
             "caption": "Deep in the pines. True strength is nurtured quietly beneath the surface.",
             "hashtags": ["#mistyforest", "#ancienttrees", "#woodland", "#slowliving"],
             "theme": "growth_and_patience",
@@ -85,16 +99,16 @@ CURATED_FALLBACK_THOUGHTS: Dict[str, List[Dict[str, Any]]] = {
     ],
     "flowers_meadows": [
         {
-            "thought": "To bloom where you are planted\nis quiet courage.",
+            "thought": "The meadow asks for nothing\nexcept the wind and sun.\nTo bloom without hurry,\nto rest in the warmth,\nand to trust your own season.",
             "caption": "Wildflowers dancing in the mountain breeze. Beauty thrives in simple, untamed places.",
             "hashtags": ["#wildflowermeadow", "#springscenery", "#bloomwhereyouare", "#gentlelife"],
             "theme": "happiness_and_gratitude",
         },
         {
-            "thought": "Simplicity is the truest\nform of wonder.",
+            "thought": "Happiness is not complicated:\nA breath of fresh air.\nSunlight through the leaves.\nAnd knowing that who you are\nis already enough.",
             "caption": "Golden sunlight over open fields. Treasure the quiet, uncomplicated moments.",
             "hashtags": ["#meadowview", "#goldenlight", "#earthtones", "#peacefulmoments"],
-            "theme": "finding_beauty_in_ordinary_moments",
+            "theme": "peace_and_simplicity",
         },
     ],
 }
@@ -148,24 +162,24 @@ class NatureThoughtsGenerator:
         past_sample = "\n".join(f"- \"{t.replace(chr(10), ' ')}\"" for t in past_thoughts[-15:])
         system_prompt = (
             "You are a poetic, introspective nature filmmaker and writer creating calm, minimalist Reel text.\n"
-            "Your aesthetic is quiet, elegant, deeply grounded, and emotionally resonant (like nature creator @degraaf.david).\n"
-            "Generate ONE short, original on-screen thought, an accompanying social caption, and 3-5 specific hashtags.\n\n"
+            "Your aesthetic is quiet, elegant, deeply grounded, and emotionally resonant.\n"
+            "Generate ONE short, original on-screen thought arranged in 4-7 readable lines, an accompanying social caption, and 3-5 specific hashtags.\n\n"
             "CRITICAL RULES:\n"
-            "1. ON-SCREEN THOUGHT: Exactly 1 concise sentence or thought (10-18 words max). Split naturally across 2 lines with a newline (\\n) suitable for vertical 9:16 video.\n"
+            "1. ON-SCREEN THOUGHT: A short, original inspirational or philosophical nature reflection, arranged in approximately 4 to 7 readable lines separated by newlines (\\n). Each line should be short (2 to 5 words), natural, and comfortable to read on vertical video. Total length: 15-32 words.\n"
             "2. NO REPETITION: Do NOT repeat or paraphrase any of these recently used thoughts:\n"
             f"{past_sample if past_sample else '(none yet)'}\n"
-            "3. NO QUOTES FROM FAMOUS PEOPLE: All thoughts must be completely original reflections.\n"
-            "4. THEMES: Peace and solitude, growth and patience, happiness and gratitude, nature and freedom, hope and resilience, letting go, or finding beauty in ordinary moments.\n"
+            "3. NO QUOTES FROM FAMOUS PEOPLE: All thoughts must be completely original reflections. Never attribute AI-generated text to a real author.\n"
+            "4. THEMES: Peace and simplicity, nature and healing, growing older and gaining perspective, gratitude and happiness, life lessons and letting go, or quiet moments and appreciating the present.\n"
             "5. HASHTAGS: Exactly 3 to 5 focused hashtags directly relevant to the specific nature category. No generic spam (#viral, #fyp, #trending are forbidden).\n"
             "6. JSON FORMAT ONLY: Respond strictly with a JSON object matching the requested schema.\n\n"
             "JSON SCHEMA:\n"
             "{\n"
-            '  "thought_text": "First line of thought\\nsecond line of thought.",\n'
+            '  "thought_text": "Line one\\nline two\\nline three\\nline four\\nline five",\n'
             '  "caption": "A thoughtful 1-2 sentence caption expanding gently on the scene.",\n'
             '  "hashtags": ["#tag1", "#tag2", "#tag3", "#tag4"],\n'
             '  "title_hook": "Optional short calm title",\n'
             '  "alternative_caption": "Optional alternate caption",\n'
-            '  "theme": "peace_and_solitude"\n'
+            '  "theme": "growing_older_and_gaining_perspective"\n'
             "}"
         )
 
