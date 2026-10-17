@@ -1896,18 +1896,23 @@ def get_nature_status_endpoint() -> Dict[str, Any]:
 @app.get("/api/nature/media/{file_path:path}")
 def serve_nature_media(file_path: str):
     """Safely stream rendered reels and thumbnails to dashboard."""
-    # Prevent directory traversal
-    resolved_path = (Path(file_path)).resolve()
     base_dir = (Path("downloads")).resolve()
+    clean = file_path.lstrip("/\\")
 
-    if not str(resolved_path).startswith(str(base_dir)):
-        # Check if relative to downloads
-        alt_path = (base_dir / file_path).resolve()
-        if not str(alt_path).startswith(str(base_dir)) or not alt_path.exists():
-            raise HTTPException(status_code=403, detail="Access denied")
-        resolved_path = alt_path
+    # Try resolving path directly or relative to downloads/ or downloads/nature/
+    candidates = [
+        (Path(clean)).resolve(),
+        (base_dir / clean).resolve(),
+        (base_dir / "nature" / clean).resolve(),
+    ]
 
-    if not resolved_path.exists() or not resolved_path.is_file():
+    resolved_path = None
+    for cand in candidates:
+        if str(cand).startswith(str(base_dir)) and cand.exists() and cand.is_file():
+            resolved_path = cand
+            break
+
+    if not resolved_path:
         raise HTTPException(status_code=404, detail="Media file not found")
 
     content_type = "video/mp4" if resolved_path.suffix.lower() == ".mp4" else "image/jpeg"

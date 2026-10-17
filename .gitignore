@@ -18,6 +18,7 @@ env/
 htmlcov/
 
 # Temporary video/audio chunks and downloads
+downloads/
 temp/*
 !temp/.gitkeep
 *.part

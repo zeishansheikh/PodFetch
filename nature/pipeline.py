@@ -11,6 +11,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import urllib.request
 
 from config import AppConfig
 from database import Database
@@ -121,7 +122,26 @@ class NaturePipeline:
         logger.info(f"Starting Nature Pipeline [{job_id}]")
         self._update_job_status(job_id, JobStage.DISCOVERING, progress=5, rendered_reels=0)
 
-        # 1. Keyword Rotation & Selection
+        # 1. Category Alias Normalization & Keyword Selection
+        CATEGORY_ALIASES = {
+            "sunsets": "sunsets_sunrises",
+            "sunset": "sunsets_sunrises",
+            "sunrise": "sunsets_sunrises",
+            "sunrises": "sunsets_sunrises",
+            "mountains": "mountains",
+            "mountain": "mountains",
+            "lake": "lakes_rivers",
+            "lakes": "lakes_rivers",
+            "rivers": "lakes_rivers",
+            "forest": "forests_waterfalls",
+            "forests": "forests_waterfalls",
+            "waterfalls": "forests_waterfalls",
+            "meadows": "flowers_meadows",
+            "flowers": "flowers_meadows",
+        }
+        if category and category.lower() in CATEGORY_ALIASES:
+            category = CATEGORY_ALIASES[category.lower()]
+
         if not category:
             cat_list = self.profile_manager.profile.categories
             category = cat_list[0] if cat_list else "mountains"
@@ -245,10 +265,9 @@ class NaturePipeline:
                 try:
                     self._update_job_status(job_id, JobStage.UPLOADING, progress=92)
                     drive_uploader = GoogleDriveUploader(self.config)
-                    # Upload rendered reel to Google Drive
-                    up_ok, drive_file_id, drive_link = drive_uploader.upload_file(
+                    drive_file_id, drive_link = drive_uploader.upload_file(
                         file_path=rendered_reel_path,
-                        category=f"nature/{category}",
+                        platform=f"nature_{category}",
                         description=f"Nature Cinematic Reel: {thought.thought_text}",
                     )
                 except Exception as e:
@@ -311,8 +330,39 @@ class NaturePipeline:
         candidates: List[NatureCandidate] = []
         try:
             discoverer = PinterestDiscoverer(self.config, self.db)
-            pins = discoverer._query_resource_api(keyword, limit=limit)
-            for p in pins:
+            search_query = keyword if "video" in keyword.lower() else f"{keyword} video"
+
+            # 1. Query board feed pins which contain direct high-speed video_list stream URLs
+            board_queries = [search_query]
+            cat_singular = category.split("_")[0].rstrip("s")
+            alt_query = f"{cat_singular} video"
+            if alt_query.lower() not in [q.lower() for q in board_queries]:
+                board_queries.append(alt_query)
+
+            video_pins = []
+            for bq in board_queries:
+                board_pins = discoverer._query_board_feed_pins(bq, max_boards=3, pins_per_board=15)
+                for p in board_pins:
+                    if p.is_video and p.raw_data and (p.raw_data.get("videos") or {}).get("video_list"):
+                        video_pins.append(p)
+                if len(video_pins) >= 5:
+                    break
+
+            # 2. If not enough board video pins found, fall back to resource search API
+            if not video_pins:
+                pins = discoverer._query_resource_api(search_query, limit=limit)
+                for p in pins:
+                    if p.is_video:
+                        if p.raw_data and (p.raw_data.get("videos") or {}).get("video_list"):
+                            video_pins.append(p)
+                        else:
+                            details = discoverer.fetch_pin_details(p.pin_id)
+                            if details and details.raw_data and (details.raw_data.get("videos") or {}).get("video_list"):
+                                video_pins.append(details)
+                            else:
+                                video_pins.append(p)
+
+            for p in video_pins:
                 cand = NatureCandidate(
                     source_id=p.pin_id,
                     platform="pinterest",
@@ -324,7 +374,7 @@ class NaturePipeline:
                     height=p.height,
                     duration_seconds=float(p.duration_seconds) if p.duration_seconds else None,
                     thumbnail_url=p.thumbnail_url,
-                    creator_attribution=p.raw_data.get("pinner", {}).get("username"),
+                    creator_attribution=p.raw_data.get("pinner", {}).get("username") if p.raw_data else None,
                     raw_metadata=p.raw_data,
                 )
                 candidates.append(cand)
@@ -334,9 +384,55 @@ class NaturePipeline:
         return candidates
 
     def _download_candidate_media(self, candidate: NatureCandidate, dest_path: Path) -> bool:
-        """Download candidate video stream to dest_path using PinterestDownloader."""
+        """Download candidate video stream to dest_path using direct stream or PinterestDownloader."""
         if dest_path.exists() and dest_path.stat().st_size > 10000:
             return True
+
+        # Check for direct video stream URL in raw_metadata
+        direct_url = None
+        if candidate.raw_metadata and isinstance(candidate.raw_metadata, dict):
+            videos = candidate.raw_metadata.get("videos") or {}
+            if isinstance(videos, dict):
+                video_list = videos.get("video_list") or {}
+                if isinstance(video_list, dict):
+                    # Sort formats by resolution (highest first)
+                    for fmt_key in ("V_1080P", "V_720P", "V_EXP7", "V_480P"):
+                        if fmt_key in video_list and isinstance(video_list[fmt_key], dict):
+                            u = video_list[fmt_key].get("url")
+                            if u and u.startswith("http"):
+                                direct_url = u
+                                break
+                    if not direct_url:
+                        for fmt_info in video_list.values():
+                            if isinstance(fmt_info, dict) and fmt_info.get("url"):
+                                direct_url = fmt_info["url"]
+                                break
+
+        if direct_url:
+            try:
+                logger.info(f"Downloading direct Pinterest video stream from: {direct_url}")
+                req = urllib.request.Request(
+                    direct_url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                        ),
+                        "Referer": "https://www.pinterest.com/",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    with open(dest_path, "wb") as f:
+                        while True:
+                            chunk = resp.read(65536)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                if dest_path.exists() and dest_path.stat().st_size > 10000:
+                    logger.info(f"Direct stream download succeeded: {dest_path.stat().st_size} bytes")
+                    return True
+            except Exception as e:
+                logger.warning(f"Direct stream download failed for {direct_url}: {e}, falling back to PinterestDownloader")
 
         vc = VideoCandidate(
             youtube_video_id=candidate.source_id,

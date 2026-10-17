@@ -200,6 +200,8 @@ class NatureTemplateRenderer:
                 filter_complex,
                 "-map",
                 "[vout]",
+                "-map",
+                "0:a?",
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -210,7 +212,11 @@ class NatureTemplateRenderer:
                 "yuv420p",
                 "-r",
                 str(self.config.fps),
-                "-an",  # Nature reel style is visual/ambient; audio can be layered later if needed
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-shortest",
                 str(out_path),
             ]
 
