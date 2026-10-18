@@ -185,6 +185,16 @@ export const api = {
     request('/nature/pipeline/stop', {
       method: 'POST',
     }),
+  getNatureKeywordPreview: (params = {}) => {
+    const query = new URLSearchParams();
+    if (params.category) query.append('category', params.category);
+    if (params.mood) query.append('mood', params.mood);
+    if (params.season) query.append('season', params.season);
+    if (params.orientation) query.append('orientation', params.orientation);
+    const qs = query.toString();
+    return request(`/nature/preview-keywords${qs ? `?${qs}` : ''}`);
+  },
+  getNatureKeywordHistory: (limit = 20) => request(`/nature/keyword-history?limit=${limit}`),
   getNatureStatus: () => request('/nature/status'),
 };
 

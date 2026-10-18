@@ -1,16 +1,16 @@
-"""Multi-factor Nature Video Quality Filter and rights eligibility gate."""
-
 from __future__ import annotations
 
 import json
 import logging
 import math
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageStat
 from nature.models import NatureCandidate, NatureProfile, NatureQualityScore
+from nature.profile import ProfileManager
 
 logger = logging.getLogger(__name__)
 
@@ -201,11 +201,196 @@ class NatureQualityFilter:
         is_scenic = score >= 45.0
         return round(score, 1), is_scenic
 
+    def calculate_recency_score(
+        self,
+        published_at: Optional[str],
+        recency_preference: str = "any",
+        strict_recency: bool = False,
+    ) -> Tuple[float, str, Optional[str]]:
+        """Calculate recency score and status based on genuine published_at timestamp.
+
+        Returns (recency_score, recency_status, rejection_reason_or_None).
+        """
+        now = datetime.now(timezone.utc)
+        if not published_at:
+            if strict_recency and recency_preference != "any":
+                return 40.0, "unknown", "Publication date is unknown and strict recency is required"
+            return 70.0, "unknown", None
+
+        try:
+            pub_dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+            if not pub_dt.tzinfo:
+                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+            age_days = (now - pub_dt).total_seconds() / 86400.0
+
+            if age_days <= 90:
+                status = "very_recent"
+                score = 100.0
+            elif age_days <= 180:
+                status = "recent"
+                score = 90.0
+            elif age_days <= 365:
+                status = "moderate"
+                score = 75.0
+            else:
+                status = "older"
+                score = 55.0
+
+            rejection = None
+            if recency_preference == "last_3_months" and age_days > 90:
+                if strict_recency:
+                    rejection = f"Video is {age_days:.0f} days old (exceeds 3 months preference)"
+                else:
+                    score = 40.0
+            elif recency_preference == "last_6_months" and age_days > 180:
+                if strict_recency:
+                    rejection = f"Video is {age_days:.0f} days old (exceeds 6 months preference)"
+                else:
+                    score = 45.0
+            elif recency_preference == "last_12_months" and age_days > 365:
+                if strict_recency:
+                    rejection = f"Video is {age_days:.0f} days old (exceeds 12 months preference)"
+                else:
+                    score = 50.0
+
+            return score, status, rejection
+        except Exception:
+            if strict_recency and recency_preference != "any":
+                return 40.0, "unknown", "Publication date is invalid and strict recency is required"
+            return 70.0, "unknown", None
+
+    def evaluate_pre_download(
+        self,
+        candidate: NatureCandidate,
+        recency_preference: str = "any",
+        strict_recency: bool = False,
+        preferred_orientation: str = "vertical_9_16",
+        min_quality_score: Optional[float] = None,
+    ) -> Tuple[float, bool, List[str]]:
+        """Rank and gate candidates before downloading media file using available metadata.
+
+        Returns (pre_download_score, is_eligible, rejection_reasons).
+        """
+        rejection_reasons: List[str] = []
+        is_eligible = True
+        threshold = min_quality_score if min_quality_score is not None else self.profile.min_quality_score
+
+        # 1. Video validation check
+        raw = candidate.raw_metadata or {}
+        if raw:
+            is_vid = bool(raw.get("is_video"))
+            has_vid_list = bool((raw.get("videos") or {}).get("video_list"))
+            has_media_vid = bool((raw.get("media") or {}).get("media_type") in ("video", "video_list"))
+            has_story = bool(raw.get("story_pin_data"))
+            if not (is_vid or has_vid_list or has_media_vid or has_story):
+                return 0.0, False, ["Candidate is not a video Pin"]
+
+        # 2. Prohibited & negative terms check
+        prof_mgr = ProfileManager(self.profile)
+        is_ex, ex_reason = prof_mgr.is_title_or_desc_excluded(candidate.title)
+        if is_ex:
+            return 0.0, False, [ex_reason or "Contains prohibited or irrelevant content"]
+
+        # 3. Stream availability check
+        stream_score = 70.0
+        videos = raw.get("videos") or {}
+        media = raw.get("media") or {}
+        video_list = videos.get("video_list") if isinstance(videos, dict) else {}
+        if isinstance(video_list, dict) and video_list:
+            stream_score = 100.0
+        elif isinstance(media, dict) and media.get("video_list"):
+            stream_score = 90.0
+
+        # 4. Resolution & Aspect Ratio check
+        w = candidate.width or 0
+        h = candidate.height or 0
+        res_score = 70.0
+        orient_score = 75.0
+        if w > 0 and h > 0:
+            candidate.aspect_ratio = f"{w}x{h}"
+            if w < 360 or h < 360:
+                is_eligible = False
+                rejection_reasons.append(f"Resolution {w}x{h} is too low for a vertical reel")
+
+            max_dim = max(w, h)
+            if max_dim >= 1080:
+                res_score = 100.0
+            elif max_dim >= 720:
+                res_score = 88.0
+            elif max_dim >= 480:
+                res_score = 72.0
+            else:
+                res_score = 50.0
+
+            ratio = w / h if h > 0 else 1.0
+            target_vert = 9.0 / 16.0  # 0.5625
+            if preferred_orientation == "vertical_9_16":
+                if abs(ratio - target_vert) < 0.1:
+                    orient_score = 100.0  # 9:16 vertical
+                elif ratio < 0.8:
+                    orient_score = 90.0   # Portrait vertical
+                elif abs(ratio - 1.0) < 0.15:
+                    orient_score = 75.0   # Square
+                else:
+                    orient_score = 60.0   # Landscape
+            elif preferred_orientation == "landscape":
+                orient_score = 100.0 if ratio > 1.2 else 60.0
+            else:
+                orient_score = 85.0
+
+        # 5. Duration check
+        dur = candidate.duration_seconds
+        dur_score = 75.0
+        if dur is not None:
+            if dur < 3.5:
+                is_eligible = False
+                rejection_reasons.append(f"Duration {dur:.1f}s is too short")
+            elif dur > 180.0:
+                is_eligible = False
+                rejection_reasons.append(f"Duration {dur:.1f}s is too long")
+            elif 8.0 <= dur <= 25.0:
+                dur_score = 100.0
+            elif 5.0 <= dur <= 45.0:
+                dur_score = 85.0
+            else:
+                dur_score = 70.0
+
+        # 6. Recency check
+        recency_score, recency_status, rec_rej = self.calculate_recency_score(
+            candidate.published_at,
+            recency_preference=recency_preference,
+            strict_recency=strict_recency,
+        )
+        if rec_rej:
+            is_eligible = False
+            rejection_reasons.append(rec_rej)
+
+        candidate.recency_status = recency_status
+
+        pre_download_score = round(
+            (stream_score * 0.25)
+            + (res_score * 0.25)
+            + (orient_score * 0.20)
+            + (dur_score * 0.15)
+            + (recency_score * 0.15),
+            1,
+        )
+        candidate.pre_score = pre_download_score
+
+        if pre_download_score < threshold and is_eligible:
+            is_eligible = False
+            rejection_reasons.append(f"Pre-download score {pre_download_score:.1f} is below threshold {threshold:.1f}")
+
+        return pre_download_score, is_eligible, rejection_reasons
+
     def evaluate_candidate(
         self,
         candidate: NatureCandidate,
         local_video_path: Optional[str | Path] = None,
         already_processed_ids: Optional[set] = None,
+        recency_preference: str = "any",
+        strict_recency: bool = False,
+        preferred_orientation: str = "vertical_9_16",
     ) -> NatureQualityScore:
         """Complete evaluation of candidate metadata and media file."""
         rejection_reasons: List[str] = []
@@ -217,22 +402,34 @@ class NatureQualityFilter:
             rejection_reasons.append(f"Duplicate candidate: source ID {candidate.source_id} already processed")
 
         # 2. Excluded terms in title / description
-        title_to_check = f"{candidate.title} {candidate.search_keyword}".lower()
-        for term in self.profile.excluded_terms:
-            if term.lower() in title_to_check:
-                is_eligible = False
-                rejection_reasons.append(f"Title/metadata contains excluded keyword '{term}'")
-                break
+        prof_mgr = ProfileManager(self.profile)
+        is_ex, ex_reason = prof_mgr.is_title_or_desc_excluded(candidate.title)
+        if is_ex:
+            is_eligible = False
+            rejection_reasons.append(ex_reason or "Title/metadata contains prohibited content")
 
-        # If no local file yet, evaluate available metadata
+        # Pre-download score calculation
+        pre_score, pre_eligible, pre_reasons = self.evaluate_pre_download(
+            candidate,
+            recency_preference=recency_preference,
+            strict_recency=strict_recency,
+            preferred_orientation=preferred_orientation,
+        )
+        if not pre_eligible:
+            is_eligible = False
+            rejection_reasons.extend(pre_reasons)
+
+        # If no local file yet, return initial pre-download metadata triage
         if not local_video_path or not Path(local_video_path).exists():
-            # Initial pre-download metadata triage
             meta_score = NatureQualityScore(
-                overall_score=70.0,
+                overall_score=pre_score if is_eligible else 0.0,
                 technical_score=70.0,
                 visual_clarity_score=70.0,
                 vertical_suitability_score=80.0,
                 scenic_relevance_score=75.0,
+                recency_score=70.0,
+                pre_download_score=pre_score,
+                recency_status=candidate.recency_status or "unknown",
                 is_scenic=True,
                 has_subject=True,
                 is_eligible=is_eligible,
@@ -347,12 +544,19 @@ class NatureQualityFilter:
         if not is_scenic and scenic_score < 25.0:
             rejection_reasons.append("Visual color distribution does not match natural scenic environment")
 
-        # Overall composite score
+        # Overall composite score with recency factor
+        rec_score = getattr(candidate, "recency_score", 70.0) if hasattr(candidate, "recency_score") else 70.0
+        if candidate.quality_score and candidate.quality_score.recency_score:
+            rec_score = candidate.quality_score.recency_score
+        elif candidate.published_at:
+            rec_score = 90.0 if "recent" in (candidate.recency_status or "") else 75.0
+
         overall_score = round(
-            (tech_score * 0.30)
+            (tech_score * 0.25)
             + (clarity_score * 0.25)
             + (scenic_score * 0.25)
-            + (vert_score * 0.20),
+            + (vert_score * 0.15)
+            + (rec_score * 0.10),
             1,
         )
 
@@ -364,11 +568,14 @@ class NatureQualityFilter:
             is_eligible = False
 
         result = NatureQualityScore(
-            overall_score=overall_score,
+            overall_score=overall_score if is_eligible else 0.0,
             technical_score=tech_score,
             visual_clarity_score=clarity_score,
             vertical_suitability_score=vert_score,
             scenic_relevance_score=scenic_score,
+            recency_score=rec_score,
+            pre_download_score=pre_score,
+            recency_status=candidate.recency_status or "unknown",
             is_scenic=is_scenic,
             has_subject=True,
             is_eligible=is_eligible,

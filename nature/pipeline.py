@@ -111,6 +111,14 @@ class NaturePipeline:
         self,
         category: Optional[str] = None,
         keyword: Optional[str] = None,
+        mood: Optional[str] = None,
+        season: Optional[str] = None,
+        recency_preference: Optional[str] = None,
+        strict_recency: Optional[bool] = None,
+        preferred_orientation: Optional[str] = None,
+        min_quality_score: Optional[float] = None,
+        search_limit: Optional[int] = None,
+        excluded_terms: Optional[List[str]] = None,
         max_reels: int = 1,
         composition_mode: str = CompositionMode.CROP.value,
         force_mock_if_empty: bool = False,
@@ -132,36 +140,28 @@ class NaturePipeline:
         logger.info(f"Starting Nature Pipeline [{job_id}]")
         self._update_job_status(job_id, JobStage.DISCOVERING, progress=5, rendered_reels=0)
 
-        # 1. Category Alias Normalization & Keyword Selection
-        CATEGORY_ALIASES = {
-            "sunsets": "sunsets_sunrises",
-            "sunset": "sunsets_sunrises",
-            "sunrise": "sunsets_sunrises",
-            "sunrises": "sunsets_sunrises",
-            "mountains": "mountains",
-            "mountain": "mountains",
-            "lake": "lakes_rivers",
-            "lakes": "lakes_rivers",
-            "rivers": "lakes_rivers",
-            "forest": "forests_waterfalls",
-            "forests": "forests_waterfalls",
-            "waterfalls": "forests_waterfalls",
-            "meadows": "flowers_meadows",
-            "flowers": "flowers_meadows",
-            "rolling_hills": "rolling_hills_countryside",
-            "rolling_hills_countryside": "rolling_hills_countryside",
-            "countryside": "rolling_hills_countryside",
-            "hills": "rolling_hills_countryside",
-        }
-        if category and category.lower() in CATEGORY_ALIASES:
-            category = CATEGORY_ALIASES[category.lower()]
+        # 1. Effective Settings & Smart Query Generation
+        eff_mood = (mood or self.profile_manager.profile.search_mood or "cinematic").strip()
+        eff_season = (season or self.profile_manager.profile.season or "any").strip()
+        eff_orientation = (preferred_orientation or self.profile_manager.profile.preferred_orientation or "vertical_9_16").strip()
+        eff_recency = (recency_preference or self.profile_manager.profile.recency_preference or "any").strip()
+        eff_strict_recency = strict_recency if strict_recency is not None else self.profile_manager.profile.strict_recency
+        eff_threshold = min_quality_score if min_quality_score is not None else self.profile_manager.profile.min_quality_score
+        eff_limit = search_limit or self.profile_manager.profile.search_limit or 15
 
-        if not category:
-            cat_list = self.profile_manager.profile.categories
-            category = cat_list[0] if cat_list else "rolling_hills_countryside"
+        if excluded_terms:
+            combined_ex = list(dict.fromkeys(self.profile_manager.profile.excluded_terms + excluded_terms))
+            self.profile_manager.profile.excluded_terms = combined_ex
 
-        if not keyword:
-            category, keyword = self.profile_manager.get_next_keyword(category, randomize=True)
+        raw_cat = category or (self.profile_manager.profile.categories[0] if self.profile_manager.profile.categories else "autumn_forest")
+        resolved_category, base_keyword, search_query = self.profile_manager.generate_search_query(
+            category_id=raw_cat,
+            keyword=keyword,
+            mood=eff_mood,
+            season=eff_season,
+            orientation=eff_orientation,
+            randomize=True if not keyword else False,
+        )
 
         # Template configuration
         chosen_template = template_name or TEMPLATE_MINIMAL_WHITE_SERIF
@@ -186,12 +186,17 @@ class NaturePipeline:
             job_id,
             JobStage.DISCOVERING,
             progress=15,
-            current_category=category,
-            current_keyword=keyword,
+            current_category=resolved_category,
+            current_keyword=base_keyword,
         )
 
-        # 2. Pinterest Discovery
-        discovered_candidates = self._discover_candidates(category, keyword, limit=self.profile_manager.profile.search_limit)
+        # 2. Pinterest Discovery using Smart Query
+        discovered_candidates = self._discover_candidates(
+            category=resolved_category,
+            keyword=base_keyword,
+            search_query=search_query,
+            limit=eff_limit,
+        )
 
         if not discovered_candidates and force_mock_if_empty:
             logger.warning("No online Pinterest candidates discovered; checking local cache.")
@@ -203,8 +208,53 @@ class NaturePipeline:
             total_candidates=len(discovered_candidates),
         )
 
-        rendered_count = 0
         already_processed = self.db.get_all_nature_candidate_ids()
+
+        # 3. Pre-Download Ranking and Multi-factor Gating
+        for cand in discovered_candidates:
+            if cand.source_id in already_processed:
+                cand.eligibility_status = "REJECTED"
+                cand.rejection_reason = "Duplicate candidate already processed"
+                self.db.save_nature_candidate(cand.to_dict())
+                continue
+
+            pre_score, pre_eligible, pre_reasons = self.quality_filter.evaluate_pre_download(
+                candidate=cand,
+                recency_preference=eff_recency,
+                strict_recency=eff_strict_recency,
+                preferred_orientation=eff_orientation,
+                min_quality_score=eff_threshold,
+            )
+            cand.pre_score = pre_score
+            if not pre_eligible:
+                cand.eligibility_status = "REJECTED"
+                cand.rejection_reason = "; ".join(pre_reasons)
+            else:
+                cand.eligibility_status = "ELIGIBLE"
+                cand.rejection_reason = None
+            self.db.save_nature_candidate(cand.to_dict())
+
+        # Sort candidates descending: eligible first, then highest pre_score
+        discovered_candidates.sort(
+            key=lambda c: (1 if c.eligibility_status != "REJECTED" else 0, c.pre_score or 0.0),
+            reverse=True,
+        )
+
+        # Record keyword search statistics in history
+        eligible_count = sum(1 for c in discovered_candidates if c.eligibility_status != "REJECTED")
+        self.db.record_nature_keyword_search(
+            category=resolved_category,
+            keyword=base_keyword,
+            query=search_query,
+            mood=eff_mood,
+            season=eff_season,
+            candidates_found=len(discovered_candidates),
+            videos_found=len(discovered_candidates),
+            eligible_found=eligible_count,
+        )
+        self.profile_manager.record_keyword_result(base_keyword, eligible_count)
+
+        rendered_count = 0
 
         for idx, candidate in enumerate(discovered_candidates):
             if self._stop_requested:
@@ -215,24 +265,14 @@ class NaturePipeline:
             if rendered_count >= max_reels:
                 break
 
-            # 3. Deduplication and Pre-Download Check
-            if candidate.source_id in already_processed:
-                candidate.eligibility_status = "REJECTED"
-                candidate.rejection_reason = "Duplicate candidate already processed"
-                self.db.save_nature_candidate(candidate.to_dict())
+            # Skip candidates rejected at pre-download stage
+            if candidate.eligibility_status == "REJECTED":
+                logger.info(f"Skipping pre-download rejected candidate {candidate.source_id}: {candidate.rejection_reason}")
                 continue
 
-            # 4. Excluded Terms Check
-            is_excluded, reason = self.profile_manager.is_title_or_desc_excluded(candidate.title)
-            if is_excluded:
-                candidate.eligibility_status = "REJECTED"
-                candidate.rejection_reason = reason
-                self.db.save_nature_candidate(candidate.to_dict())
-                continue
-
-            # 5. Download Media File
+            # 4. Download Media File
             self._update_job_status(job_id, JobStage.DOWNLOADING, progress=45)
-            cat_dir = self.originals_dir / category
+            cat_dir = self.originals_dir / resolved_category
             cat_dir.mkdir(parents=True, exist_ok=True)
             local_filename = f"{candidate.source_id}.mp4"
             target_download_path = cat_dir / local_filename
@@ -244,17 +284,20 @@ class NaturePipeline:
                 self.db.save_nature_candidate(candidate.to_dict())
                 continue
 
-            # 6. Deep Multi-factor Quality Inspection
+            # 5. Deep Multi-factor Quality Inspection (Post-download)
             self._update_job_status(job_id, JobStage.VALIDATING, progress=60)
             score = self.quality_filter.evaluate_candidate(
                 candidate=candidate,
                 local_video_path=target_download_path,
                 already_processed_ids=already_processed,
+                recency_preference=eff_recency,
+                strict_recency=eff_strict_recency,
+                preferred_orientation=eff_orientation,
             )
             self.db.save_nature_candidate(candidate.to_dict())
 
             if not score.passed_gate:
-                logger.info(f"Candidate {candidate.source_id} rejected: {candidate.rejection_reason}")
+                logger.info(f"Candidate {candidate.source_id} rejected after download inspection: {candidate.rejection_reason}")
                 continue
 
             # 7. AI Poetic Thought & Caption Generation
@@ -361,15 +404,21 @@ class NaturePipeline:
             "rendered_reels": rendered_count,
         }
 
-    def _discover_candidates(self, category: str, keyword: str, limit: int = 15) -> List[NatureCandidate]:
+    def _discover_candidates(
+        self,
+        category: str,
+        keyword: str,
+        search_query: Optional[str] = None,
+        limit: int = 15,
+    ) -> List[NatureCandidate]:
         """Discover video pins using existing PinterestDiscovery module."""
         candidates: List[NatureCandidate] = []
         try:
             discoverer = PinterestDiscoverer(self.config, self.db)
-            search_query = keyword if "video" in keyword.lower() else f"{keyword} video"
+            effective_query = search_query or (keyword if "video" in keyword.lower() else f"{keyword} video")
 
             # 1. Query board feed pins which contain direct high-speed video_list stream URLs
-            board_queries = [search_query]
+            board_queries = [effective_query]
             cat_singular = category.split("_")[0].rstrip("s")
             alt_query = f"{cat_singular} video"
             if alt_query.lower() not in [q.lower() for q in board_queries]:
@@ -386,7 +435,15 @@ class NaturePipeline:
 
             # 2. If not enough board video pins found, fall back to resource search API
             if not video_pins:
-                pins = discoverer._query_resource_api(search_query, limit=limit)
+                pins = discoverer._query_resource_api(effective_query, limit=limit)
+                if not pins and keyword and keyword.lower() != effective_query.lower():
+                    # Fallback to base keyword
+                    pins = discoverer._query_resource_api(keyword, limit=limit)
+                if not pins:
+                    # Fallback to streamlined category search
+                    cat_clean = category.replace("_", " ")
+                    pins = discoverer._query_resource_api(f"cinematic {cat_clean} video", limit=limit)
+
                 for p in pins:
                     if p.is_video:
                         if p.raw_data and (p.raw_data.get("videos") or {}).get("video_list"):
@@ -399,6 +456,12 @@ class NaturePipeline:
                                 video_pins.append(p)
 
             for p in video_pins:
+                pub_at = getattr(p, "published_at", None)
+                if not pub_at and p.raw_data:
+                    from pinterest_discovery import parse_pinterest_timestamp
+                    raw_dt = p.raw_data.get("created_at") or p.raw_data.get("published_at")
+                    pub_at = parse_pinterest_timestamp(raw_dt)
+
                 cand = NatureCandidate(
                     source_id=p.pin_id,
                     platform="pinterest",
@@ -411,6 +474,8 @@ class NaturePipeline:
                     duration_seconds=float(p.duration_seconds) if p.duration_seconds else None,
                     thumbnail_url=p.thumbnail_url,
                     creator_attribution=p.raw_data.get("pinner", {}).get("username") if p.raw_data else None,
+                    published_at=pub_at,
+                    aspect_ratio=f"{p.width}x{p.height}" if p.width and p.height else None,
                     raw_metadata=p.raw_data,
                 )
                 candidates.append(cand)

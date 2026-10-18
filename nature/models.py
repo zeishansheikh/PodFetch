@@ -35,6 +35,37 @@ class JobStage(str, Enum):
     PAUSED = "PAUSED"
 
 
+class RecencyPreference(str, Enum):
+    ANY = "any"
+    LAST_12_MONTHS = "last_12_months"
+    LAST_6_MONTHS = "last_6_months"
+    LAST_3_MONTHS = "last_3_months"
+
+
+class SearchMood(str, Enum):
+    ANY = "any"
+    DREAMY = "dreamy"
+    PEACEFUL = "peaceful"
+    CINEMATIC = "cinematic"
+    MOODY = "moody"
+    COZY = "cozy"
+    DRAMATIC = "dramatic"
+
+
+class SeasonPreference(str, Enum):
+    ANY = "any"
+    AUTUMN = "autumn"
+    WINTER = "winter"
+    SPRING = "spring"
+    SUMMER = "summer"
+
+
+class PreferredOrientation(str, Enum):
+    VERTICAL_9_16 = "vertical_9_16"
+    ANY = "any"
+    LANDSCAPE = "landscape"
+
+
 @dataclass
 class NatureCategory:
     """Predefined nature category with curated keyword variations."""
@@ -43,6 +74,7 @@ class NatureCategory:
     name: str
     description: str
     keywords: List[str]
+    icon: Optional[str] = None
 
 
 @dataclass
@@ -52,6 +84,14 @@ class NatureProfile:
     name: str = "Nature Cinematic Reels"
     categories: List[str] = field(
         default_factory=lambda: [
+            "autumn_forest",
+            "misty_mountains",
+            "forests_moss_rain",
+            "lakes_rivers_waterfalls",
+            "golden_hour_sunsets",
+            "meadows_flowers",
+            "snow_winter",
+            "rare_premium",
             "rolling_hills_countryside",
             "mountains",
             "lakes_rivers",
@@ -63,28 +103,81 @@ class NatureProfile:
     custom_keywords: Dict[str, List[str]] = field(default_factory=dict)
     excluded_terms: List[str] = field(
         default_factory=lambda: [
-            "person",
-            "people",
-            "face",
-            "man",
-            "woman",
+            # Anime & AI Still Art
+            "anime",
+            "cartoon",
+            "illustration",
+            "manga",
+            "drawing",
+            "sketch",
+            "digital art",
+            "ai generated",
+            "midjourney",
+            "stable diffusion",
+            "cgi",
+            "blender 3d",
+            "comic",
+            # Commercial, Fashion & Beauty
+            "fashion",
+            "outfit",
+            "makeup",
+            "beauty",
+            "cosmetics",
+            "skincare",
+            "hair tutorial",
+            "shopping",
+            "unboxing",
+            "product",
+            "commercial",
+            "advertisement",
+            "promo",
+            "recipe",
+            "cooking",
+            "gym",
+            "workout",
+            # Gaming & Social Memes
+            "gaming",
+            "gameplay",
+            "minecraft",
+            "fortnite",
+            "roblox",
+            "dance",
+            "tiktok dance",
             "vlog",
             "interview",
+            "podcast",
             "meme",
-            "text",
-            "quote",
-            "dance",
-            "car",
-            "city",
-            "building",
-            "traffic",
-            "commercial",
+            # Watermarks & Overlays
             "watermark",
+            "repost",
+            "@tiktok",
+            "capcut",
+            "douyin",
+            # Urban & Traffic
+            "car interior",
+            "traffic",
+            "highway cars",
+            # Fiction, Movies & Sci-Fi
+            "sci-fi",
+            "scifi",
+            "action movie",
+            "movie trailer",
+            "dinosaur",
+            "dinosaurier",
+            "spaceship",
+            "alien",
+            "cyberpunk",
+            "superhero",
         ]
     )
     search_limit: int = 15
     daily_processing_limit: int = 10
     min_quality_score: float = 65.0
+    recency_preference: str = "any"
+    strict_recency: bool = False
+    search_mood: str = "cinematic"
+    season: str = "any"
+    preferred_orientation: str = "vertical_9_16"
     is_active: bool = True
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -101,6 +194,9 @@ class NatureQualityScore:
     visual_clarity_score: float = 0.0
     vertical_suitability_score: float = 0.0
     scenic_relevance_score: float = 0.0
+    recency_score: float = 70.0
+    pre_download_score: float = 0.0
+    recency_status: str = "unknown"
     is_scenic: bool = False
     has_subject: bool = False
     is_eligible: bool = False  # Mandatory rights & reuse gate
@@ -131,6 +227,10 @@ class NatureCandidate:
     bitrate: Optional[int] = None
     thumbnail_url: Optional[str] = None
     creator_attribution: Optional[str] = None
+    published_at: Optional[str] = None
+    recency_status: str = "unknown"
+    aspect_ratio: Optional[str] = None
+    pre_score: Optional[float] = None
     quality_score: Optional[NatureQualityScore] = None
     eligibility_status: str = "ELIGIBLE"
     rejection_reason: Optional[str] = None

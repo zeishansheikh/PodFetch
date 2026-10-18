@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from config import AppConfig
@@ -22,6 +23,41 @@ from filters import VideoCandidate
 from logger import get_logger
 
 logger = get_logger("pinterest_discovery")
+
+
+def parse_pinterest_timestamp(raw_value: Any) -> Optional[str]:
+    """Parse raw Pinterest timestamp (RFC 2822, ISO 8601, or Unix timestamp) into UTC ISO format string.
+    Returns None if missing or unparseable.
+    """
+    if not raw_value:
+        return None
+    try:
+        if isinstance(raw_value, (int, float)):
+            ts = raw_value / 1000.0 if raw_value > 1e11 else float(raw_value)
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            return dt.isoformat()
+        if isinstance(raw_value, str):
+            val = raw_value.strip()
+            if not val:
+                return None
+            # 1. Try RFC 2822 (e.g. 'Fri, 12 Jun 2026 11:29:29 +0000')
+            try:
+                dt = parsedate_to_datetime(val)
+                if dt:
+                    dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                    return dt.astimezone(timezone.utc).isoformat()
+            except Exception:
+                pass
+            # 2. Try ISO 8601 (e.g. '2024-03-20T10:15:30Z')
+            try:
+                dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+                dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(timezone.utc).isoformat()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
 
 
 @dataclass
@@ -37,6 +73,7 @@ class PinterestPinMetadata:
     duration_seconds: Optional[int] = None
     width: Optional[int] = None
     height: Optional[int] = None
+    published_at: Optional[str] = None
     discovered_keywords: List[str] = field(default_factory=list)
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
@@ -55,7 +92,7 @@ class PinterestPinMetadata:
             channel_name="Pinterest",
             title=self.title,
             youtube_url=self.canonical_url,
-            published_at=None,
+            published_at=self.published_at,
             duration_seconds=self.duration_seconds,
             is_short=False,
             is_live=False,
@@ -188,6 +225,15 @@ def parse_pin_from_dict(pin_data: Dict[str, Any], keyword: str = "") -> Optional
     if bool(pin_data.get("is_video")):
         is_video = True
 
+    # Publication date extraction (created_at / published_at / story metadata)
+    raw_date = (
+        pin_data.get("created_at")
+        or pin_data.get("published_at")
+        or pin_data.get("publish_date")
+        or (pin_data.get("story_pin_data") or {}).get("metadata", {}).get("created_at")
+    )
+    published_at = parse_pinterest_timestamp(raw_date)
+
     # Fallback title if empty
     if not title:
         if description:
@@ -207,6 +253,7 @@ def parse_pin_from_dict(pin_data: Dict[str, Any], keyword: str = "") -> Optional
         duration_seconds=duration_seconds,
         width=width,
         height=height,
+        published_at=published_at,
         discovered_keywords=[keyword] if keyword else [],
         raw_data=pin_data,
     )

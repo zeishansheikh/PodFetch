@@ -1614,6 +1614,11 @@ class NatureProfileUpdateRequest(BaseModel):
     search_limit: Optional[int] = Field(default=15, ge=1, le=50)
     daily_processing_limit: Optional[int] = Field(default=10, ge=1, le=100)
     min_quality_score: Optional[float] = Field(default=65.0, ge=0.0, le=100.0)
+    recency_preference: Optional[str] = "any"
+    strict_recency: Optional[bool] = False
+    search_mood: Optional[str] = "cinematic"
+    season: Optional[str] = "any"
+    preferred_orientation: Optional[str] = "vertical_9_16"
     is_active: Optional[bool] = True
 
 
@@ -1642,6 +1647,14 @@ class NatureRerenderRequest(BaseModel):
 class NatureRunRequest(BaseModel):
     category: Optional[str] = None
     keyword: Optional[str] = None
+    mood: Optional[str] = None
+    season: Optional[str] = None
+    recency_preference: Optional[str] = "any"
+    strict_recency: Optional[bool] = False
+    preferred_orientation: Optional[str] = "vertical_9_16"
+    min_quality_score: Optional[float] = None
+    search_limit: Optional[int] = Field(default=15, ge=1, le=50)
+    excluded_terms: Optional[List[str]] = None
     max_reels: int = Field(default=1, ge=1, le=5)
     composition_mode: str = Field(default="crop")
     template_name: Optional[str] = None
@@ -1726,6 +1739,16 @@ def update_nature_profile_endpoint(req: NatureProfileUpdateRequest) -> Dict[str,
         prof.daily_processing_limit = req.daily_processing_limit
     if req.min_quality_score is not None:
         prof.min_quality_score = req.min_quality_score
+    if req.recency_preference is not None:
+        prof.recency_preference = req.recency_preference
+    if req.strict_recency is not None:
+        prof.strict_recency = req.strict_recency
+    if req.search_mood is not None:
+        prof.search_mood = req.search_mood
+    if req.season is not None:
+        prof.season = req.season
+    if req.preferred_orientation is not None:
+        prof.preferred_orientation = req.preferred_orientation
     if req.is_active is not None:
         prof.is_active = req.is_active
 
@@ -1926,6 +1949,77 @@ def rerender_nature_reel_endpoint(
     }
 
 
+@app.get("/api/nature/preview-keywords")
+def preview_nature_keywords_endpoint(
+    category: Optional[str] = None,
+    mood: Optional[str] = None,
+    season: Optional[str] = None,
+    orientation: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Generate live search query preview, available rotation pool, and options."""
+    pipe = get_nature_pipeline()
+    eff_cat = category or (pipe.profile_manager.profile.categories[0] if pipe.profile_manager.profile.categories else "autumn_forest")
+    eff_mood = (mood or pipe.profile_manager.profile.search_mood or "cinematic").strip()
+    eff_season = (season or pipe.profile_manager.profile.season or "any").strip()
+    eff_orient = (orientation or pipe.profile_manager.profile.preferred_orientation or "vertical_9_16").strip()
+
+    resolved_cat, base_kw, query = pipe.profile_manager.generate_search_query(
+        category_id=eff_cat,
+        mood=eff_mood,
+        season=eff_season,
+        orientation=eff_orient,
+        randomize=False,
+    )
+    categories = pipe.profile_manager.get_categories()
+    cat_obj = categories.get(resolved_cat) or categories.get(eff_cat)
+    cat_name = cat_obj.name if cat_obj else eff_cat.replace("_", " ").title()
+    all_kw = cat_obj.keywords if cat_obj else []
+
+    sample_queries = []
+    for sample_kw in all_kw[:4]:
+        _, _, sq = pipe.profile_manager.generate_search_query(
+            category_id=resolved_cat,
+            keyword=sample_kw,
+            mood=eff_mood,
+            season=eff_season,
+            orientation=eff_orient,
+        )
+        sample_queries.append(sq)
+
+    return {
+        "category": resolved_cat,
+        "category_name": cat_name,
+        "base_keyword": base_kw,
+        "generated_query": query,
+        "mood": eff_mood,
+        "season": eff_season,
+        "orientation": eff_orient,
+        "available_keywords": all_kw,
+        "sample_queries": sample_queries,
+        "available_moods": ["any", "dreamy", "peaceful", "cinematic", "moody", "cozy", "dramatic"],
+        "available_seasons": ["any", "autumn", "winter", "spring", "summer"],
+        "available_orientations": [
+            {"id": "vertical_9_16", "name": "Vertical (9:16 Reel)"},
+            {"id": "any", "name": "Any Orientation"},
+            {"id": "landscape", "name": "Landscape (16:9)"},
+        ],
+        "available_recency_options": [
+            {"id": "any", "name": "Any Time"},
+            {"id": "last_12_months", "name": "Last 12 Months"},
+            {"id": "last_6_months", "name": "Last 6 Months"},
+            {"id": "last_3_months", "name": "Last 3 Months (Fresh)"},
+        ],
+    }
+
+
+@app.get("/api/nature/keyword-history")
+def get_nature_keyword_history_endpoint(limit: int = Query(50, ge=1, le=100)) -> Dict[str, Any]:
+    """Retrieve historical keyword discovery records and yield metrics."""
+    pipe = get_nature_pipeline()
+    records = pipe.db.get_nature_keyword_history(limit=limit)
+    return {"history": records, "total": len(records)}
+
+
 @app.post("/api/nature/pipeline/run")
 def run_nature_pipeline_endpoint(
     req: NatureRunRequest, background_tasks: BackgroundTasks
@@ -1938,6 +2032,14 @@ def run_nature_pipeline_endpoint(
             pipe.run_pipeline(
                 category=req.category,
                 keyword=req.keyword,
+                mood=req.mood,
+                season=req.season,
+                recency_preference=req.recency_preference,
+                strict_recency=req.strict_recency,
+                preferred_orientation=req.preferred_orientation,
+                min_quality_score=req.min_quality_score,
+                search_limit=req.search_limit,
+                excluded_terms=req.excluded_terms,
                 max_reels=req.max_reels,
                 composition_mode=req.composition_mode,
                 template_name=req.template_name,

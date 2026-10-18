@@ -25,6 +25,10 @@ import {
   Layers,
   ChevronRight,
   Settings2,
+  Shuffle,
+  Calendar,
+  Search,
+  Filter,
 } from 'lucide-react';
 import api from '../api/client';
 
@@ -55,6 +59,17 @@ export function NatureReelMaker({ showToast }) {
   // Run pipeline parameters
   const [runCategory, setRunCategory] = useState('');
   const [runKeyword, setRunKeyword] = useState('');
+  const [runMood, setRunMood] = useState('cinematic');
+  const [runSeason, setRunSeason] = useState('any');
+  const [runRecency, setRunRecency] = useState('any');
+  const [runStrictRecency, setRunStrictRecency] = useState(false);
+  const [runOrientation, setRunOrientation] = useState('vertical_9_16');
+  const [runMinScore, setRunMinScore] = useState(65);
+  const [runMaxInspect, setRunMaxInspect] = useState(25);
+  const [runExcludedKeywords, setRunExcludedKeywords] = useState('');
+  const [keywordPreview, setKeywordPreview] = useState(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [keywordHistory, setKeywordHistory] = useState([]);
   const [runMaxReels, setRunMaxReels] = useState(1);
   const [runComposition, setRunComposition] = useState('crop');
   const [runTemplate, setRunTemplate] = useState('Nature Cinematic — Minimal White Serif Quote');
@@ -123,6 +138,50 @@ export function NatureReelMaker({ showToast }) {
     return () => clearInterval(interval);
   }, []);
 
+  // Live Keyword Preview Fetcher
+  const updateKeywordPreview = async (cat, mood, season, orient) => {
+    try {
+      setLoadingPreview(true);
+      const res = await api.getNatureKeywordPreview({
+        category: cat !== undefined ? cat : runCategory,
+        mood: mood !== undefined ? mood : runMood,
+        season: season !== undefined ? season : runSeason,
+        orientation: orient !== undefined ? orient : runOrientation,
+      });
+      if (res) {
+        setKeywordPreview(res);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch keyword preview:', err);
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
+  const handleOpenRunModal = () => {
+    const initialCat = runCategory || profile?.categories?.[0] || 'autumn_forest';
+    const initialMood = runMood || profile?.search_mood || 'cinematic';
+    const initialSeason = runSeason || profile?.season || 'any';
+    const initialRecency = runRecency || profile?.recency_preference || 'any';
+    const initialStrict = runStrictRecency || profile?.strict_recency || false;
+    const initialOrient = runOrientation || profile?.preferred_orientation || 'vertical_9_16';
+    const initialMinScore = runMinScore || profile?.min_quality_score || 65;
+
+    setRunCategory(initialCat);
+    setRunMood(initialMood);
+    setRunSeason(initialSeason);
+    setRunRecency(initialRecency);
+    setRunStrictRecency(initialStrict);
+    setRunOrientation(initialOrient);
+    setRunMinScore(initialMinScore);
+    setRunModalOpen(true);
+
+    updateKeywordPreview(initialCat, initialMood, initialSeason, initialOrient);
+    api.getNatureKeywordHistory(15).then((data) => {
+      if (data && data.history) setKeywordHistory(data.history);
+    }).catch(() => {});
+  };
+
   // Trigger Pipeline Run
   const handleStartPipeline = async () => {
     try {
@@ -130,7 +189,17 @@ export function NatureReelMaker({ showToast }) {
       setRunModalOpen(false);
       await api.runNaturePipeline({
         category: runCategory || null,
-        keyword: runKeyword || null,
+        keyword: runKeyword.trim() ? runKeyword.trim() : null,
+        search_mood: runMood,
+        season: runSeason,
+        recency_preference: runRecency,
+        strict_recency: runStrictRecency,
+        preferred_orientation: runOrientation,
+        min_quality_score: parseFloat(runMinScore) || 65.0,
+        max_candidates_to_inspect: parseInt(runMaxInspect, 10) || 25,
+        excluded_terms: runExcludedKeywords.trim()
+          ? runExcludedKeywords.split(',').map((s) => s.trim()).filter(Boolean)
+          : null,
         max_reels: parseInt(runMaxReels, 10) || 1,
         composition_mode: runComposition,
         template_name: runTemplate || 'Nature Cinematic — Minimal White Serif Quote',
@@ -257,7 +326,7 @@ export function NatureReelMaker({ showToast }) {
               <Square size={16} /> Stop Pipeline
             </button>
           ) : (
-            <button className="btn btn-primary" onClick={() => setRunModalOpen(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button className="btn btn-primary" onClick={handleOpenRunModal} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Play size={16} /> Run Pipeline
             </button>
           )}
@@ -416,7 +485,7 @@ export function NatureReelMaker({ showToast }) {
 
                 <button
                   className="btn btn-primary"
-                  onClick={() => setRunModalOpen(true)}
+                  onClick={handleOpenRunModal}
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
                   <Play size={15} /> Launch Reel Maker
@@ -441,7 +510,7 @@ export function NatureReelMaker({ showToast }) {
               <p style={{ maxWidth: '460px', margin: '0 auto 20px', fontSize: '14px' }}>
                 Run the pipeline to discover eligible nature clips, generate thoughtful on-screen text, and render vertical 9:16 reels for review.
               </p>
-              <button className="btn btn-primary" onClick={() => setRunModalOpen(true)}>
+              <button className="btn btn-primary" onClick={handleOpenRunModal}>
                 <Play size={16} /> Run Pipeline Now
               </button>
             </div>
@@ -736,12 +805,11 @@ export function NatureReelMaker({ showToast }) {
                 <thead>
                   <tr style={{ borderBottom: '2px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
                     <th style={{ padding: '10px' }}>Clip / Source</th>
-                    <th style={{ padding: '10px' }}>Category</th>
-                    <th style={{ padding: '10px' }}>Specs (Res / FPS)</th>
-                    <th style={{ padding: '10px' }}>Clarity</th>
-                    <th style={{ padding: '10px' }}>Scenic</th>
-                    <th style={{ padding: '10px' }}>Vertical</th>
-                    <th style={{ padding: '10px' }}>Overall</th>
+                    <th style={{ padding: '10px' }}>Category & Keyword</th>
+                    <th style={{ padding: '10px' }}>Publication / Recency</th>
+                    <th style={{ padding: '10px' }}>Specs (Res / Dur)</th>
+                    <th style={{ padding: '10px' }}>Pre-Score</th>
+                    <th style={{ padding: '10px' }}>Overall Quality</th>
                     <th style={{ padding: '10px' }}>Gate Status</th>
                     <th style={{ padding: '10px' }}>Reason / Notes</th>
                   </tr>
@@ -749,9 +817,19 @@ export function NatureReelMaker({ showToast }) {
                 <tbody>
                   {candidates.map((cand) => {
                     const isEligible = cand.eligibility_status === 'ELIGIBLE';
+                    const recencyColors = {
+                      very_recent: { bg: 'rgba(34, 197, 94, 0.15)', text: '#22c55e', label: 'Very Recent' },
+                      recent: { bg: 'rgba(16, 185, 129, 0.15)', text: '#10b981', label: 'Recent (<6mo)' },
+                      moderate: { bg: 'rgba(59, 130, 246, 0.15)', text: '#3b82f6', label: 'Moderate (<1yr)' },
+                      older: { bg: 'rgba(245, 158, 11, 0.15)', text: '#f59e0b', label: 'Older (>1yr)' },
+                      unknown: { bg: 'rgba(113, 113, 122, 0.15)', text: '#a1a1aa', label: 'Date Unknown' },
+                    };
+                    const recBadge = recencyColors[cand.recency_status] || recencyColors.unknown;
+                    const pubDateStr = cand.published_at ? new Date(cand.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : null;
+
                     return (
-                      <tr key={cand.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                        <td style={{ padding: '10px', maxWidth: '200px' }}>
+                      <tr key={cand.id || cand.source_id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td style={{ padding: '10px', maxWidth: '220px' }}>
                           <div style={{ fontWeight: '600', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {cand.title || `Pin ${cand.source_id}`}
                           </div>
@@ -759,28 +837,49 @@ export function NatureReelMaker({ showToast }) {
                             href={cand.canonical_url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            style={{ fontSize: '11px', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            style={{ fontSize: '11px', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}
                           >
                             Source Pin <ExternalLink size={10} />
                           </a>
                         </td>
-                        <td style={{ padding: '10px', textTransform: 'capitalize', color: 'var(--text-muted)' }}>
-                          {cand.category?.replace('_', ' ')}
+                        <td style={{ padding: '10px', maxWidth: '180px' }}>
+                          <div style={{ textTransform: 'capitalize', color: 'var(--text-main)', fontWeight: '500', fontSize: '12px' }}>
+                            {cand.category?.replace(/_/g, ' ')}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {cand.search_keyword || 'Automatic Seed'}
+                          </div>
+                        </td>
+                        <td style={{ padding: '10px', fontSize: '12px' }}>
+                          <div style={{ color: pubDateStr ? 'var(--text-main)' : 'var(--text-disabled)', fontFamily: pubDateStr ? 'var(--font-mono)' : 'inherit', fontSize: '11px' }}>
+                            {pubDateStr || 'No timestamp'}
+                          </div>
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              marginTop: '2px',
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              fontSize: '10px',
+                              fontWeight: '600',
+                              background: recBadge.bg,
+                              color: recBadge.text,
+                            }}
+                          >
+                            {recBadge.label}
+                          </span>
                         </td>
                         <td style={{ padding: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
-                          {cand.width && cand.height ? `${cand.width}×${cand.height}` : '—'} • {cand.fps ? `${cand.fps}fps` : '—'}
+                          <div>{cand.width && cand.height ? `${cand.width}×${cand.height}` : '—'}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-disabled)' }}>
+                            {cand.duration_seconds ? `${cand.duration_seconds.toFixed(0)}s` : '—'} {cand.aspect_ratio ? `(${cand.aspect_ratio})` : ''}
+                          </div>
                         </td>
-                        <td style={{ padding: '10px', fontWeight: '600', color: cand.visual_clarity_score > 60 ? 'var(--status-success)' : 'var(--status-error)' }}>
-                          {cand.visual_clarity_score ? `${cand.visual_clarity_score}` : '—'}
+                        <td style={{ padding: '10px', fontWeight: '600', color: (cand.pre_score || 0) >= 70 ? 'var(--status-success)' : 'var(--text-muted)' }}>
+                          {cand.pre_score != null ? cand.pre_score.toFixed(1) : '—'}
                         </td>
-                        <td style={{ padding: '10px', color: 'var(--text-muted)' }}>
-                          {cand.scenic_relevance_score ? `${cand.scenic_relevance_score}` : '—'}
-                        </td>
-                        <td style={{ padding: '10px', color: 'var(--text-muted)' }}>
-                          {cand.vertical_suitability_score ? `${cand.vertical_suitability_score}` : '—'}
-                        </td>
-                        <td style={{ padding: '10px', fontWeight: '700', color: cand.overall_score >= 65 ? 'var(--status-success)' : 'var(--text-main)' }}>
-                          {cand.overall_score ? `${cand.overall_score}` : '—'}
+                        <td style={{ padding: '10px', fontWeight: '700', color: (cand.overall_score || 0) >= 65 ? 'var(--status-success)' : 'var(--text-main)' }}>
+                          {cand.overall_score != null ? cand.overall_score.toFixed(1) : '—'}
                         </td>
                         <td style={{ padding: '10px' }}>
                           <span
@@ -797,7 +896,7 @@ export function NatureReelMaker({ showToast }) {
                           </span>
                         </td>
                         <td style={{ padding: '10px', maxWidth: '240px', fontSize: '12px', color: cand.rejection_reason ? 'var(--status-error)' : 'var(--text-subtle)' }}>
-                          {cand.rejection_reason || 'Passed quality and rights gate'}
+                          {cand.rejection_reason || 'Passed quality and recency gate'}
                         </td>
                       </tr>
                     );
@@ -968,6 +1067,100 @@ export function NatureReelMaker({ showToast }) {
             </div>
           </div>
 
+          {/* Discovery Strategy Defaults */}
+          <div style={{ paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
+            <h4 style={{ margin: '0 0 4px', fontSize: '15px', fontWeight: '600', color: 'var(--text-main)' }}>
+              Discovery Strategy & Freshness Defaults
+            </h4>
+            <p style={{ margin: '0 0 12px', fontSize: '12px', color: 'var(--text-muted)' }}>
+              Configure default mood, season, recency filtering, and video orientation across discovery runs.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
+              <div>
+                <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '6px' }}>
+                  Default Mood
+                </label>
+                <select
+                  className="form-select"
+                  style={{ width: '100%', padding: '6px 10px' }}
+                  value={profile.search_mood || 'cinematic'}
+                  onChange={(e) => setProfile({ ...profile, search_mood: e.target.value })}
+                >
+                  <option value="cinematic">Cinematic (Recommended)</option>
+                  <option value="dreamy">Dreamy & Ethereal</option>
+                  <option value="peaceful">Peaceful & Calm</option>
+                  <option value="moody">Moody & Atmospheric</option>
+                  <option value="cozy">Cozy & Warm</option>
+                  <option value="dramatic">Dramatic & Epic</option>
+                  <option value="any">Any Mood</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '6px' }}>
+                  Default Season
+                </label>
+                <select
+                  className="form-select"
+                  style={{ width: '100%', padding: '6px 10px' }}
+                  value={profile.season || 'any'}
+                  onChange={(e) => setProfile({ ...profile, season: e.target.value })}
+                >
+                  <option value="any">Any Season</option>
+                  <option value="autumn">Autumn / Fall Foliage</option>
+                  <option value="winter">Winter / Snowy</option>
+                  <option value="spring">Spring / Meadows</option>
+                  <option value="summer">Summer / Sunlit</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '6px' }}>
+                  Recency Preference
+                </label>
+                <select
+                  className="form-select"
+                  style={{ width: '100%', padding: '6px 10px' }}
+                  value={profile.recency_preference || 'any'}
+                  onChange={(e) => setProfile({ ...profile, recency_preference: e.target.value })}
+                >
+                  <option value="any">Any Publication Date</option>
+                  <option value="last_12_months">Last 12 Months</option>
+                  <option value="last_6_months">Last 6 Months</option>
+                  <option value="last_3_months">Last 3 Months (Fresh Footage)</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '6px' }}>
+                  Preferred Orientation
+                </label>
+                <select
+                  className="form-select"
+                  style={{ width: '100%', padding: '6px 10px' }}
+                  value={profile.preferred_orientation || 'vertical_9_16'}
+                  onChange={(e) => setProfile({ ...profile, preferred_orientation: e.target.value })}
+                >
+                  <option value="vertical_9_16">Vertical 9:16 Reel (Recommended)</option>
+                  <option value="any">Any Aspect Ratio</option>
+                  <option value="landscape">Landscape 16:9</option>
+                </select>
+              </div>
+            </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px', fontSize: '13px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={Boolean(profile.strict_recency)}
+                onChange={(e) => setProfile({ ...profile, strict_recency: e.target.checked })}
+              />
+              <span style={{ fontWeight: '500' }}>
+                Strict Recency Enforcement (Disallow older footage or pins with unknown publication timestamps)
+              </span>
+            </label>
+          </div>
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
             <button type="submit" className="btn btn-primary" style={{ padding: '8px 20px' }}>
               Save Profile Settings
@@ -1020,13 +1213,17 @@ export function NatureReelMaker({ showToast }) {
               {/* Target Category */}
               <div>
                 <label style={{ display: 'block', fontWeight: '600', fontSize: '13px', marginBottom: '6px' }}>
-                  Footage Category
+                  Nature Category
                 </label>
                 <select
                   className="form-select"
                   style={{ width: '100%', padding: '8px' }}
                   value={runCategory}
-                  onChange={(e) => setRunCategory(e.target.value)}
+                  onChange={(e) => {
+                    const nextCat = e.target.value;
+                    setRunCategory(nextCat);
+                    updateKeywordPreview(nextCat, runMood, runSeason, runOrientation);
+                  }}
                 >
                   <option value="">Automatic Rotation (All Categories)</option>
                   {categories.map((c) => (
@@ -1035,6 +1232,261 @@ export function NatureReelMaker({ showToast }) {
                     </option>
                   ))}
                 </select>
+              </div>
+
+              {/* Dynamic Live Keyword & Strategy Preview */}
+              <div
+                style={{
+                  background: 'rgba(34, 197, 94, 0.06)',
+                  border: '1px solid rgba(34, 197, 94, 0.25)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '12px 14px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: '700', color: '#22c55e' }}>
+                    <Search size={14} /> Pinterest Live Query Preview
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => updateKeywordPreview(runCategory, runMood, runSeason, runOrientation)}
+                    disabled={loadingPreview}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--accent-primary)',
+                      fontSize: '11px',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    <Shuffle size={12} className={loadingPreview ? 'spin' : ''} /> Rotate Seed
+                  </button>
+                </div>
+
+                <div
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '12px',
+                    background: 'rgba(0, 0, 0, 0.35)',
+                    padding: '8px 10px',
+                    borderRadius: '4px',
+                    color: '#f4f4f5',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {loadingPreview
+                    ? 'Generating smart query...'
+                    : keywordPreview?.generated_query || 'aesthetic autumn forest cinematic vertical video'}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                  <span>
+                    Base Seed: <em>"{keywordPreview?.base_keyword || 'cinematic nature video'}"</em>
+                  </span>
+                  <span>{keywordPreview?.available_keywords?.length || 0} variations in category pool</span>
+                </div>
+
+                {/* Sample quick seed chips */}
+                {keywordPreview?.sample_queries?.length > 0 && (
+                  <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px dashed rgba(255,255,255,0.08)' }}>
+                    <span style={{ fontSize: '10px', color: 'var(--text-disabled)', display: 'block', marginBottom: '4px' }}>
+                      Click quick seed to use:
+                    </span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {keywordPreview.sample_queries.map((sq, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setRunKeyword(sq)}
+                          style={{
+                            background: runKeyword === sq ? 'var(--accent-primary)' : 'rgba(255,255,255,0.06)',
+                            color: runKeyword === sq ? '#ffffff' : 'var(--text-muted)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            borderRadius: '12px',
+                            padding: '2px 8px',
+                            fontSize: '10px',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {sq.length > 28 ? `${sq.slice(0, 28)}...` : sq}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Custom Override Keyword */}
+              <div>
+                <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                  Custom Keyword Override (Optional)
+                </label>
+                <input
+                  type="text"
+                  className="form-input"
+                  style={{ width: '100%', padding: '6px 10px', fontSize: '13px' }}
+                  placeholder="Leave empty to use smart library rotation and mood blending..."
+                  value={runKeyword}
+                  onChange={(e) => setRunKeyword(e.target.value)}
+                />
+              </div>
+
+              {/* Discovery Strategy: Mood, Season & Orientation Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                <div>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                    Search Mood
+                  </label>
+                  <select
+                    className="form-select"
+                    style={{ width: '100%', padding: '6px' }}
+                    value={runMood}
+                    onChange={(e) => {
+                      const nextMood = e.target.value;
+                      setRunMood(nextMood);
+                      updateKeywordPreview(runCategory, nextMood, runSeason, runOrientation);
+                    }}
+                  >
+                    <option value="cinematic">Cinematic</option>
+                    <option value="dreamy">Dreamy</option>
+                    <option value="peaceful">Peaceful</option>
+                    <option value="moody">Moody</option>
+                    <option value="cozy">Cozy</option>
+                    <option value="dramatic">Dramatic</option>
+                    <option value="any">Any Mood</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                    Season
+                  </label>
+                  <select
+                    className="form-select"
+                    style={{ width: '100%', padding: '6px' }}
+                    value={runSeason}
+                    onChange={(e) => {
+                      const nextSeason = e.target.value;
+                      setRunSeason(nextSeason);
+                      updateKeywordPreview(runCategory, runMood, nextSeason, runOrientation);
+                    }}
+                  >
+                    <option value="any">Any Season</option>
+                    <option value="autumn">Autumn</option>
+                    <option value="winter">Winter</option>
+                    <option value="spring">Spring</option>
+                    <option value="summer">Summer</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                    Orientation
+                  </label>
+                  <select
+                    className="form-select"
+                    style={{ width: '100%', padding: '6px' }}
+                    value={runOrientation}
+                    onChange={(e) => {
+                      const nextOrient = e.target.value;
+                      setRunOrientation(nextOrient);
+                      updateKeywordPreview(runCategory, runMood, runSeason, nextOrient);
+                    }}
+                  >
+                    <option value="vertical_9_16">Vertical 9:16</option>
+                    <option value="any">Any</option>
+                    <option value="landscape">Landscape</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Freshness & Quality Gating Controls */}
+              <div
+                style={{
+                  background: 'var(--bg-surface-subtle)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '12px',
+                  border: '1px solid var(--border-subtle)',
+                }}
+              >
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                      Recency Preference
+                    </label>
+                    <select
+                      className="form-select"
+                      style={{ width: '100%', padding: '6px' }}
+                      value={runRecency}
+                      onChange={(e) => setRunRecency(e.target.value)}
+                    >
+                      <option value="any">Any Publication Date</option>
+                      <option value="last_12_months">Last 12 Months</option>
+                      <option value="last_6_months">Last 6 Months</option>
+                      <option value="last_3_months">Last 3 Months (Fresh)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                      Max Inspect per Run ({runMaxInspect})
+                    </label>
+                    <input
+                      type="range"
+                      min="5"
+                      max="40"
+                      value={runMaxInspect}
+                      onChange={(e) => setRunMaxInspect(parseInt(e.target.value, 10))}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ marginTop: '10px' }}>
+                  <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                    Min Quality Score Threshold ({runMinScore} / 100)
+                  </label>
+                  <input
+                    type="range"
+                    min="45"
+                    max="85"
+                    value={runMinScore}
+                    onChange={(e) => setRunMinScore(parseInt(e.target.value, 10))}
+                    style={{ width: '100%' }}
+                  />
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    Evaluates stream availability, resolution, aspect ratio, scenic color & recency.
+                  </span>
+                </div>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', fontSize: '12px', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={runStrictRecency}
+                    onChange={(e) => setRunStrictRecency(e.target.checked)}
+                  />
+                  <span>Enforce Strict Recency (reject clips older than selected window or without verified timestamp)</span>
+                </label>
+              </div>
+
+              {/* Excluded Keywords Negative Filter */}
+              <div>
+                <label style={{ display: 'block', fontWeight: '600', fontSize: '12px', marginBottom: '4px' }}>
+                  Exclude Keywords (Negative Filters)
+                </label>
+                <input
+                  type="text"
+                  className="form-input"
+                  style={{ width: '100%', padding: '6px 10px', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                  placeholder="anime, cartoon, gaming, makeup, shopping, ads, workout"
+                  value={runExcludedKeywords}
+                  onChange={(e) => setRunExcludedKeywords(e.target.value)}
+                />
               </div>
 
               {/* Pre-render Thought Editing */}
@@ -1049,7 +1501,7 @@ export function NatureReelMaker({ showToast }) {
                   </span>
                 </div>
                 <textarea
-                  rows={4}
+                  rows={3}
                   className="form-input"
                   style={{ width: '100%', fontFamily: 'Georgia, serif', fontSize: '13px', padding: '8px', lineHeight: 1.5 }}
                   placeholder="Leave empty for Groq AI to generate original poetic reflection, or write 4–7 short lines here..."

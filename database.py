@@ -211,6 +211,9 @@ class Database:
                     eligibility_status TEXT DEFAULT 'ELIGIBLE',
                     rejection_reason TEXT,
                     raw_metadata TEXT,
+                    published_at TEXT,
+                    recency_status TEXT DEFAULT 'unknown',
+                    pre_score REAL DEFAULT 0.0,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
@@ -221,6 +224,39 @@ class Database:
             )
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_nature_candidates_eligibility ON nature_candidates(eligibility_status)"
+            )
+
+            # Safely add any new columns to existing nature_candidates table
+            cursor.execute("PRAGMA table_info(nature_candidates)")
+            nc_cols = [row["name"] for row in cursor.fetchall()]
+            if "published_at" not in nc_cols:
+                cursor.execute("ALTER TABLE nature_candidates ADD COLUMN published_at TEXT")
+            if "recency_status" not in nc_cols:
+                cursor.execute("ALTER TABLE nature_candidates ADD COLUMN recency_status TEXT DEFAULT 'unknown'")
+            if "pre_score" not in nc_cols:
+                cursor.execute("ALTER TABLE nature_candidates ADD COLUMN pre_score REAL DEFAULT 0.0")
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS nature_keyword_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT NOT NULL,
+                    keyword TEXT NOT NULL,
+                    query TEXT NOT NULL,
+                    mood TEXT DEFAULT 'any',
+                    season TEXT DEFAULT 'any',
+                    candidates_found INTEGER DEFAULT 0,
+                    videos_found INTEGER DEFAULT 0,
+                    eligible_found INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_nature_kw_hist_cat ON nature_keyword_history(category)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_nature_kw_hist_created ON nature_keyword_history(created_at)"
             )
 
             cursor.execute(
@@ -703,8 +739,9 @@ class Database:
                     bitrate, thumbnail_url, creator_attribution, overall_score,
                     technical_score, visual_clarity_score, vertical_suitability_score,
                     scenic_relevance_score, is_eligible, eligibility_status,
-                    rejection_reason, raw_metadata, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    rejection_reason, raw_metadata, published_at, recency_status,
+                    pre_score, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_id) DO UPDATE SET
                     title = COALESCE(excluded.title, nature_candidates.title),
                     width = COALESCE(excluded.width, nature_candidates.width),
@@ -720,6 +757,9 @@ class Database:
                     is_eligible = excluded.is_eligible,
                     eligibility_status = excluded.eligibility_status,
                     rejection_reason = excluded.rejection_reason,
+                    published_at = COALESCE(excluded.published_at, nature_candidates.published_at),
+                    recency_status = COALESCE(excluded.recency_status, nature_candidates.recency_status),
+                    pre_score = COALESCE(excluded.pre_score, nature_candidates.pre_score),
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -727,7 +767,7 @@ class Database:
                     candidate_data.get("platform", "pinterest"),
                     candidate_data.get("title", ""),
                     candidate_data.get("canonical_url", ""),
-                    candidate_data.get("category", "mountains"),
+                    candidate_data.get("category", "autumn_forest"),
                     candidate_data.get("search_keyword", ""),
                     candidate_data.get("width"),
                     candidate_data.get("height"),
@@ -745,6 +785,9 @@ class Database:
                     candidate_data.get("eligibility_status", "ELIGIBLE"),
                     candidate_data.get("rejection_reason"),
                     raw_meta,
+                    candidate_data.get("published_at"),
+                    candidate_data.get("recency_status", "unknown"),
+                    candidate_data.get("pre_score", 0.0),
                     now,
                 ),
             )
@@ -764,6 +807,50 @@ class Database:
                     "SELECT * FROM nature_candidates ORDER BY created_at DESC LIMIT ?",
                     (limit,),
                 )
+            return [dict(r) for r in cursor.fetchall()]
+
+    def record_nature_keyword_search(
+        self,
+        category: str,
+        keyword: str,
+        query: str,
+        mood: str = "any",
+        season: str = "any",
+        candidates_found: int = 0,
+        videos_found: int = 0,
+        eligible_found: int = 0,
+    ) -> int:
+        """Record a keyword discovery execution and its yield in nature_keyword_history."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO nature_keyword_history (
+                    category, keyword, query, mood, season,
+                    candidates_found, videos_found, eligible_found
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    category,
+                    keyword,
+                    query,
+                    mood,
+                    season,
+                    candidates_found,
+                    videos_found,
+                    eligible_found,
+                ),
+            )
+            return cursor.lastrowid
+
+    def get_nature_keyword_history(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Fetch recent keyword searches and their candidate yield."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM nature_keyword_history ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
             return [dict(r) for r in cursor.fetchall()]
 
     def get_all_nature_candidate_ids(self) -> set:
